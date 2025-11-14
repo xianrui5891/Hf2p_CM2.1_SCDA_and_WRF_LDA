@@ -1,0 +1,73 @@
+{
+  "global_min": {
+    "atm::T_SURF": 180.35459899902344,
+    "atm::U_REF": -35.34069061279297,
+    "atm::V_REF": -44.05601501464844,
+    "atm::PS": 50029.16015625,
+    "ocn::SST": -1.9007948637008667,
+    "ocn::U_SURF": -2.069309949874878,
+    "ocn::V_SURF": -1.8412963151931763,
+    "ocn::ETA_T": -6.380338668823242
+  },
+  "global_max": {
+    "atm::T_SURF": 351.682373046875,
+    "atm::U_REF": 39.06052017211914,
+    "atm::V_REF": 34.34302520751953,
+    "atm::PS": 107939.609375,
+    "ocn::SST": 35.94911575317383,
+    "ocn::U_SURF": 3.242082357406616,
+    "ocn::V_SURF": 2.464456081390381,
+    "ocn::ETA_T": 2.178075075149536
+  },
+  "atm_vars": [
+    "T_SURF",
+    "U_REF",
+    "V_REF",
+    "PS"
+  ],
+  "ocn_vars": [
+    "SST",
+    "U_SURF",
+    "V_SURF",
+    "ETA_T"
+  ],
+  "precision": "float32",
+  "vert_mode": "fold_z",
+  "normalize_per_channel": true,
+  "handle_nan": true,
+  "nan_fill_value": 0.0,
+  "var_level_counts": {
+    "atm": {
+      "T_SURF": 1,
+      "U_REF": 1,
+      "V_REF": 1,
+      "PS": 1
+    },
+    "ocn": {
+      "SST": 1,
+      "U_SURF": 1,
+      "V_SURF": 1,
+      "ETA_T": 1
+    }
+  },
+  "total_timesteps": 160600,
+  "atm_shape": [
+    160600,
+    4,
+    90,
+    144
+  ],
+  "ocn_shape": [
+    160600,
+    4,
+    200,
+    360
+  ],
+  "processing_stats": {
+    "stats_computation_time": 279.18867444992065,
+    "data_processing_time": 563.309906244278,
+    "data_combination_time": 1154.6353976726532,
+    "total_files_processed": 110,
+    "memory_optimization": "disk_based_intermediate_storage"
+  }
+}

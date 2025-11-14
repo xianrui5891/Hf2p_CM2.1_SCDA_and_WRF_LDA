@@ -1,0 +1,53 @@
+!    -*- f90 -*-
+! Note: the context of this file is case sensitive.
+
+python module cm2 ! in 
+    interface  ! in :cm2
+        module cm2_cda_plugs ! in :cm2:cm2_cda_plugs.F90
+            use cm2_cda_mainsubs, only: tool_cm2_cda_maininit,tool_atmos_step_pre,tool_atmos_step,tool_ocean_step_pre,tool_ocean_step,tool_restart_step,tool_main_end
+            real, public :: cm2_cda_maininit
+            real, public :: atmos_step_pre
+            real, public :: atmos_step
+            real, public :: ocean_step_pre
+            real, public :: ocean_step
+            real, public :: restart_step
+            integer, public :: main_end
+            subroutine cm2_cda_maininit(num_cpld_calls_o,num_atmos_calls_o) ! in :cm2:cm2_cda_plugs.F90:cm2_cda_plugs
+                integer intent(out) :: num_cpld_calls_o
+                integer intent(out) :: num_atmos_calls_o
+            end subroutine cm2_cda_maininit
+            subroutine atmos_step_pre(nc) ! in :cm2:cm2_cda_plugs.F90:cm2_cda_plugs
+                integer intent(in) :: nc
+            end subroutine atmos_step_pre
+            subroutine atmos_step(u_bot,v_bot,t_bot,p_bot,nc,na,nu_scda) ! in :cm2:cm2_cda_plugs.F90:cm2_cda_plugs
+                real(kind=8) dimension(144,90),intent(inout) :: u_bot
+                real(kind=8) dimension(144,90),intent(inout) :: v_bot
+                real(kind=8) dimension(144,90),intent(inout) :: t_bot
+                real(kind=8) dimension(144,90),intent(inout) :: p_bot
+                integer intent(in) :: nc
+                integer intent(in) :: na
+                integer intent(in) :: nu_scda
+            end subroutine atmos_step
+            subroutine ocean_step_pre ! in :cm2:cm2_cda_plugs.F90:cm2_cda_plugs
+            end subroutine ocean_step_pre
+            subroutine ocean_step(ssu,ssv,sst,ssz,nc,na,nu_scda) ! in :cm2:cm2_cda_plugs.F90:cm2_cda_plugs
+                real(kind=8) dimension(360,200),intent(inout) :: ssu
+                real(kind=8) dimension(360,200),intent(inout) :: ssv
+                real(kind=8) dimension(360,200),intent(inout) :: sst
+                real(kind=8) dimension(360,200),intent(inout) :: ssz
+                integer intent(in) :: nc
+                integer intent(in) :: na
+                integer intent(in) :: nu_scda
+            end subroutine ocean_step
+            subroutine restart_step(nc) ! in :cm2:cm2_cda_plugs.F90:cm2_cda_plugs
+                integer intent(in) :: nc
+            end subroutine restart_step
+            subroutine main_end ! in :cm2:cm2_cda_plugs.F90:cm2_cda_plugs
+            end subroutine main_end
+        end module cm2_cda_plugs
+    end interface 
+end python module cm2
+
+! This file was auto-generated with f2py (version:1.26.4).
+! See:
+! https://web.archive.org/web/20140822061353/http://cens.ioc.ee/projects/f2py2e
