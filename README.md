@@ -4,34 +4,68 @@ This repository contains the core code and minimal supporting materials used in 
 
 To reproduce the experiments you will need to prepare the observation data, train the models locally, and adapt the Python dataflow to your environment.
 
+---
+
+## Associated paper and authors
+
+**Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation**
+
+by Xianrui Zhu, Zikuan Lin, Shaoqing Zhang, Zebin Lu, Songhua Wu, Xiangyun Hou, Zhisheng Xiao, Zhicheng Ren, Jingyu Li, Jing Xu, Yang Gao, Rixu Hao, Xiaolin Yu, Mingkui Li
+
+---
+
 ## Contents
 
-* Minimal implementation files and driver scripts referenced in the paper for:
+This repository provides minimal implementation files and driver scripts referenced in the paper for:
 
-  * `CM2.1_SCDA`
-  * `WRF_LDA`
+* `CM2.1_SCDA`
+* `WRF_LDA`
 
-Each folder contains the pared-down/modified code and example drivers required to run the manuscript’s demo cases.
+Each folder contains the pared-down / modified code and example drivers required to run the manuscript’s demo cases.
 
-## Prerequisites / Important notes
+Additionally, each of the above folders contains two environment reference files (one Conda and one pip) that can be used to configure a Python environment:
+
+* **For `cm2.1_scda`**
+
+  * `environment_cm2_scda.yaml` (Conda)
+  * `requirements.txt` (pip)
+* **For `WRF_lda`**
+
+  * `environment_wrflda.yaml` (Conda)
+  * `requirements.txt` (pip)
+
+## Important files & layout
+
+* `CM2.1_SCDA/` — trimmed/modified CM2.1 code, drivers, and support scripts.
+* `WRF_LDA/` — trimmed/modified WRF-related code, drivers, and support scripts.
+* `PMC/` — Python modules and scripts (see notes below).
+* `plug/` (inside each main folder) — F2py-related Fortran wrappers used to build `.so` modules (for example `plug.F90` and the corresponding generated shared objects).
+* `data/` — partial data used to illustrate/assist the Python implementations (not the full observation sets).
+* `README.md` — this file.
+
+## Notes on Python code (PMC) and data
+
+* The Python implementations used in the experiments are located in the `PMC/` folder. This includes:
+
+  * Fortran–Python interaction code and the Python main controller.
+  * Implementation of the VAE-LDA algorithm used in the manuscript.
+  * Other ML model code used in experiments.
+* The `data/` folder contains limited example files to help understand the Python-side implementation and dataflow. **These are not the full observation datasets** — full observations must be prepared separately.
+* When you run the Python code you will likely need to adapt the file paths and the data flow to match your local filesystem and data preparation pipeline.
+
+## Build / compilation notes
 
 ### For `CM2.1_SCDA`
 
-* Build and compile with the **Intel** compiler toolchain.
-* Install and compile NetCDF (and the NetCDF–Python interface), OpenMPI, and other dependencies using the Intel compilers.
-* Avoid relying exclusively on Conda-provided binaries for compiled components — the Intel toolchain is required to ensure binary compatibility with the provided code.
+* Build and compile using the **Intel** compiler toolchain.
+* Install and compile NetCDF (and the NetCDF–Python interface), OpenMPI, and other compiled dependencies with the Intel compilers to ensure binary compatibility with the provided Fortran code and libraries.
+* Avoid relying exclusively on Conda-provided binaries for compiled components — the Intel toolchain is required.
 
 ### For `WRF_LDA`
 
-* When running WRF’s `./configure` script, select option **`34 1`**. We cannot guarantee correct behavior if a different configuration option is chosen.
-
-## Reproducibility
-
-This repository provides only the modified code and minimal scripts used in the study. To fully reproduce the experiments you must:
-
-1. Acquire or prepare the observation datasets used in the paper.
-2. Install and build the required software using the toolchain and options described above.
-3. Train the AI models locally (pretrained weights are not provided).
+* When running WRF’s `./configure` script, **select option `34 1`**. We cannot guarantee correct behavior if a different configuration option is chosen.
+* **Important:** copy the files from `WRFv3.7.1/cm2.1-modified-src` (in this repository) into the corresponding locations in your WRF/CM2.1 source trees, **overwriting** the original source files, and then compile. The modified files must replace the source files prior to building.
+* The compilation/compile-flow is described in Section 2 of the paper — follow that flow for best reproducibility.
 
 ## Contact
 
@@ -39,7 +73,3 @@ If you have questions or encounter issues, please contact:
 
 * Shaoqing Zhang — [szhang@ouc.edu.cn](mailto:szhang@ouc.edu.cn)
 * Xianrui Zhu — [zhuxianrui@stu.ouc.edu.cn](mailto:zhuxianrui@stu.ouc.edu.cn) / [mapzhu@foxmail.com](mailto:mapzhu@foxmail.com)
-
----
-
-Thank you for your interest — contributions, bug reports, and questions are welcome.
