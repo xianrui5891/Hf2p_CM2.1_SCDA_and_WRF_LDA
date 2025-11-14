@@ -36,16 +36,14 @@ Additionally, each of the above folders contains two environment reference files
 
 ## Important files & layout
 
-* `CM2.1_SCDA/` — trimmed/modified CM2.1 code, drivers, and support scripts.
-* `WRF_LDA/` — trimmed/modified WRF-related code, drivers, and support scripts.
-* `PMC/` — Python modules and scripts (see notes below).
-* `plug/` (inside each main folder) — F2py-related Fortran wrappers used to build `.so` modules (for example `plug.F90` and the corresponding generated shared objects).
+* `WRFv3.7.1/cm2.1-modified-src` trimmed/modified CM2.1/WRF code.
+* `PMC_w_LDA(SCDA)/` — Python modules and scripts (see notes below).
+* `plug/` F2py-related Fortran wrappers used to build `.so` modules (for example `plug.F90` and the corresponding generated shared objects).
 * `data/` — partial data used to illustrate/assist the Python implementations (not the full observation sets).
-* `README.md` — this file.
 
-## Notes on Python code (PMC) and data
+## Notes on Python code and data
 
-* The Python implementations used in the experiments are located in the `PMC/` folder. This includes:
+* The Python implementations used in the experiments are located in the `PMC_w_LDA(SCDA)/` folder. This includes:
 
   * Fortran–Python interaction code and the Python main controller.
   * Implementation of the VAE-LDA algorithm used in the manuscript.
@@ -57,14 +55,16 @@ Additionally, each of the above folders contains two environment reference files
 
 ### For `CM2.1_SCDA`
 
+* **Important:** copy the files from `cm2.1-modified-src` (in this repository) into the corresponding locations in your WRF source trees, **overwriting** the original source files, and then compile. The modified files must replace the source files prior to building.
 * Build and compile using the **Intel** compiler toolchain.
 * Install and compile NetCDF (and the NetCDF–Python interface), OpenMPI, and other compiled dependencies with the Intel compilers to ensure binary compatibility with the provided Fortran code and libraries.
 * Avoid relying exclusively on Conda-provided binaries for compiled components — the Intel toolchain is required.
+* The compilation/compile-flow is described in Section 2 of the paper — follow that flow for best reproducibility.
 
 ### For `WRF_LDA`
 
 * When running WRF’s `./configure` script, **select option `34 1`**. We cannot guarantee correct behavior if a different configuration option is chosen.
-* **Important:** copy the files from `WRFv3.7.1/cm2.1-modified-src` (in this repository) into the corresponding locations in your WRF/CM2.1 source trees, **overwriting** the original source files, and then compile. The modified files must replace the source files prior to building.
+* **Important:** copy the files from `WRFv3.7.1-modified-src` (in this repository) into the corresponding locations in your WRF source trees, **overwriting** the original source files, and then compile. The modified files must replace the source files prior to building.
 * The compilation/compile-flow is described in Section 2 of the paper — follow that flow for best reproducibility.
 
 ## Contact
