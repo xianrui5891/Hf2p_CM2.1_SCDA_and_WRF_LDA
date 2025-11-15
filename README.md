@@ -10,7 +10,7 @@ To reproduce the experiments you will need to prepare the observation data, trai
 
 **Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation**
 
-by Xianrui Zhu, Zikuan Lin, Shaoqing Zhang, Zebin Lu, Songhua Wu, Xiangyun Hou, Zhisheng Xiao, Zhicheng Ren, Jingyu Li, Jing Xu, Yang Gao, Rixu Hao, Xiaolin Yu, Mingkui Li
+by Xianrui Zhu, Zikuan Lin, Shaoqing Zhang, Zebin Lu, Songhua Wu, Xiangyun Hou, Zhisheng Xiao, Zhicheng Ren, Jiangyu Li, Jing Xu, Yang Gao, Rixu Hao, Xiaolin Yu, Mingkui Li
 
 ---
 
