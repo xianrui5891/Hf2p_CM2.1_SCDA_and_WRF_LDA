@@ -2,7 +2,7 @@
 
 This repository contains the core code and minimal supporting materials used in the paper *Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation*. It includes the trimmed and modified files necessary to understand and reproduce parts of the work. **Note:** the observation datasets, pretrained model weights, and the full source trees of CM2.1 and WRF v3.7.1 are **not** included — only the code files we changed are provided here.
 
-To reproduce the experiments you will need to prepare the observation data, train the models locally, and adapt the Python dataflow to your environment.
+To reproduce the experiments you will need to prepare the observation data, train the models locally, and adapt the Python dataflow to your environment. If you require the processed observation data or the pretrained model weights used in the study, they are available from the authors upon reasonable request.
 
 ---
 
