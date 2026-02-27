@@ -1,0 +1,173 @@
+! mainuse.inc start>
+
+  use constants_mod,           only: constants_init
+
+  use time_manager_mod,        only: time_type, set_calendar_type, set_time
+  use time_manager_mod,        only: set_date, get_date, days_in_month, month_name
+  use time_manager_mod,        only: operator(+), operator(-), operator (<)
+  use time_manager_mod,        only: operator (>), operator ( /= ), operator ( / )
+  use time_manager_mod,        only: operator (*), THIRTY_DAY_MONTHS, JULIAN
+  use time_manager_mod,        only: NOLEAP, NO_CALENDAR, INVALID_CALENDAR
+  use time_manager_mod,        only: date_to_string, increment_date
+  use time_manager_mod,        only: operator(>=), operator(<=), operator(==)
+
+  use fms_mod,                 only: open_namelist_file, field_exist, file_exist, check_nml_error
+  use fms_mod,                 only: uppercase, error_mesg, write_version_number
+  use fms_mod,                 only: fms_init, fms_end, stdout
+  use fms_mod,                 only: read_data, write_data
+
+  use fms_io_mod,              only: fms_io_exit
+  use fms_io_mod,              only: restart_file_type, register_restart_field, save_restart
+
+  use diag_manager_mod,        only: diag_manager_init, diag_manager_end, diag_grid_end
+  use diag_manager_mod,        only: DIAG_OCEAN, DIAG_OTHER, DIAG_ALL, get_base_date
+
+  use field_manager_mod,       only: MODEL_ATMOS, MODEL_LAND, MODEL_ICE
+
+  use tracer_manager_mod,      only: tracer_manager_init, get_tracer_index
+  use tracer_manager_mod,      only: get_number_tracers, get_tracer_names, NO_TRACER
+
+  use coupler_types_mod,       only: coupler_types_init
+
+  use data_override_mod,       only: data_override_init
+
+  use atmos_model_mod,         only: atmos_model_init, atmos_model_end
+  use atmos_model_mod,         only: update_atmos_model_down
+  use atmos_model_mod,         only: update_atmos_model_up
+  use atmos_model_mod,         only: atmos_data_type
+  use atmos_model_mod,         only: land_ice_atmos_boundary_type
+  use atmos_model_mod,         only: atmos_model_restart
+
+  use land_model_mod,          only: land_model_init, land_model_end
+  use land_model_mod,          only: land_data_type, atmos_land_boundary_type
+  use land_model_mod,          only: update_land_model_fast, update_land_model_slow
+  use land_model_mod,          only: land_model_restart
+
+  use ice_model_mod,           only: ice_model_init, ice_model_end
+  use ice_model_mod,           only: update_ice_model_slow_up
+  use ice_model_mod,           only: update_ice_model_fast
+  use ice_model_mod,           only: update_ice_model_slow_dn
+  use ice_model_mod,           only: ice_data_type, land_ice_boundary_type
+  use ice_model_mod,           only: ocean_ice_boundary_type, atmos_ice_boundary_type
+  use ice_model_mod,           only: ice_model_restart
+
+  use ocean_model_mod,         only: update_ocean_model, ocean_model_init
+  use ocean_model_mod,         only: ocean_model_end, ocean_public_type, ocean_state_type, ice_ocean_boundary_type
+  use ocean_model_mod,         only: ocean_model_restart
+!
+! flux_ calls translate information between model grids - see flux_exchange.f90
+!
+
+  use flux_exchange_mod,       only: flux_exchange_init
+  use flux_exchange_mod,       only: sfc_boundary_layer
+  use flux_exchange_mod,       only: generate_sfc_xgrid
+  use flux_exchange_mod,       only: flux_down_from_atmos
+  use flux_exchange_mod,       only: flux_up_to_atmos
+  use flux_exchange_mod,       only: flux_land_to_ice
+  use flux_exchange_mod,       only: flux_ice_to_ocean
+  use flux_exchange_mod,       only: flux_ocean_to_ice
+  use flux_exchange_mod,       only: flux_check_stocks, flux_init_stocks, flux_ice_to_ocean_stocks, flux_ocean_from_ice_stocks
+
+  use atmos_tracer_driver_mod, only: atmos_tracer_driver_gather_data
+
+  use mpp_mod,                 only: mpp_clock_id, mpp_clock_begin, mpp_clock_end, mpp_chksum
+  use mpp_mod,                 only: mpp_init, mpp_pe, mpp_npes, mpp_root_pe, MAXPES
+  use mpp_mod,                 only: stderr, stdlog, mpp_error, NOTE, FATAL, WARNING
+  use mpp_mod,                 only: mpp_set_current_pelist, mpp_declare_pelist
+
+  use mpp_io_mod,              only: mpp_open, mpp_close, mpp_io_clock_on
+  use mpp_io_mod,              only: MPP_NATIVE, MPP_RDONLY, MPP_DELETE
+
+  use mpp_domains_mod,         only: mpp_broadcast_domain
+
+  use memutils_mod,            only: print_memuse_stats
+
+!-----------------------------------------------------------------------
+
+  character(len=128) :: version = '$Id: coupler_main.F90,v 18.0 2010/03/02 23:35:50 fms Exp $'
+  character(len=128) :: tag = '$Name: riga $'
+
+!-----------------------------------------------------------------------
+!---- model defined-types ----
+
+  type (atmos_data_type) :: Atm
+  type  (land_data_type) :: Land
+  type   (ice_data_type) :: Ice
+  ! allow members of ocean type to be aliased (ap)
+  type (ocean_public_type), target :: Ocean
+  type (ocean_state_type),  pointer :: Ocean_state => NULL()
+
+  type(atmos_land_boundary_type)     :: Atmos_land_boundary
+  type(atmos_ice_boundary_type)      :: Atmos_ice_boundary
+  type(land_ice_atmos_boundary_type) :: Land_ice_atmos_boundary
+  type(land_ice_boundary_type)       :: Land_ice_boundary
+  type(ice_ocean_boundary_type)      :: Ice_ocean_boundary
+  type(ocean_ice_boundary_type)      :: Ocean_ice_boundary
+
+!-----------------------------------------------------------------------
+! ----- coupled model time -----
+
+  type (time_type) :: Time, Time_init, Time_end, &
+                      Time_step_atmos, Time_step_cpld
+  type(time_type) :: Time_atmos, Time_ocean
+
+!------ for intermediate restart
+  type(restart_file_type), allocatable :: Ice_bc_restart(:), Ocn_bc_restart(:)
+  character(len=64),       allocatable :: ice_bc_restart_file(:), ocn_bc_restart_file(:) 
+  integer                              :: num_ice_bc_restart=0, num_ocn_bc_restart=0
+  type(time_type)                      :: Time_restart, Time_restart_current, Time_start
+  character(len=32)                    :: timestamp
+
+! ----- coupled model initial date -----
+
+  integer :: date_init(6)
+  integer :: calendar_type = INVALID_CALENDAR
+
+  integer, dimension(6) :: restart_interval = (/ 0, 0, 0, 0, 0, 0/)
+  integer, dimension(6) :: current_date     = (/ 0, 0, 0, 0, 0, 0 /)
+  character(len=17) :: calendar = '                 '
+  logical :: force_date_from_namelist = .false.  ! override restart values for date
+  integer :: months=0, days=0, hours=0, minutes=0, seconds=0
+  integer :: dt_atmos = 0  ! fluxes passed between atmosphere & ice/land
+  integer :: dt_cpld  = 0  ! fluxes passed between ice & ocean
+
+
+  integer ::atmos_npes=0, ocean_npes=0, ice_npes=0, land_npes=0
+  logical :: do_atmos =.true., do_land =.true., do_ice =.true., do_ocean=.true.
+  logical :: do_flux =.true.
+  logical :: concurrent=.FALSE.
+  logical :: use_lag_fluxes=.TRUE.
+  logical :: do_chksum=.FALSE.
+  integer :: layout_mask(2) = (/0 , 0/)
+  integer :: n_mask = 0
+  integer :: mask_list(2, MAXPES), n, m 
+  integer :: check_stocks = 0 ! -1: never 0: at end of run only n>0: every n coupled steps
+  integer, parameter :: mp = 2*MAXPES
+  data ((mask_list(n,m),n=1, 2),m=1,MAXPES) /mp*0/
+
+  namelist /coupler_nml/ current_date, calendar, force_date_from_namelist, months, days, hours,      &
+                         minutes, seconds, dt_cpld, dt_atmos, do_atmos,              &
+                         do_land, do_ice, do_ocean, do_flux, atmos_npes, ocean_npes, &
+                         ice_npes, land_npes, concurrent, use_lag_fluxes, do_chksum, &
+                         n_mask, layout_mask, mask_list, check_stocks, restart_interval
+
+  integer :: initClock, mainClock, termClock
+
+  character(len=80) :: text
+  character(len=48), parameter                    :: mod_name = 'coupler_main_mod'
+ 
+  integer :: ensemble_id = 1 , outunit
+  integer, allocatable :: ensemble_pelist(:, :) 
+
+character(len=64), parameter    :: sub_name = 'coupler_main'
+character(len=256), parameter   :: error_header =                               &
+     '==>Error from ' // trim(mod_name) // '(' // trim(sub_name) // '):'
+character(len=256), parameter   :: warn_header =                                &
+     '==>Warning from ' // trim(mod_name) // '(' // trim(sub_name) // '):'
+character(len=256), parameter   :: note_header =                                &
+     '==>Note from ' // trim(mod_name) // '(' // trim(sub_name) // '):'
+
+!#######################################################################
+
+! mainuse.inc end>
+

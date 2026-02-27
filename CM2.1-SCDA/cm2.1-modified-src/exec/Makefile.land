@@ -1,0 +1,68 @@
+# Makefile created by mkmf 2022.01.00
+
+SRCROOT = /home/ouc/zhuxianrui/CM2-f2py/CM2.1-python/src_v5.0/
+
+CPPDEFS = -DMAX_LINKS_=10 -DENABLE_ECDA -Duse_netCDF -Duse_libMPI -DSPMD -DLAND_BND_TRACERS -DUSE_OCEAN_BGC -Duse_shared_pointers -DNI_=360 -DNJ_=200 -DNK_=50 -DNI_LOCAL_=60 -DNJ_LOCAL_=40 -DENABLE_ODA -DENABLE_ADA -DENABLE_IDA -from-rtn1 -to-rtn999
+
+MK_TEMPLATE = /home/ouc/zhuxianrui/CM2-f2py/CM2.1-python/exec/intel.mk
+include $(MK_TEMPLATE)
+
+
+.DEFAULT:
+	-echo $@ does not exist.
+all: libland.a
+climap_albedo.o: $(SRCROOT)land_param/climap_albedo.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)land_param/climap_albedo.F90
+land_model.o: $(SRCROOT)land_lad/land_model.F90 $(SRCROOT)shared/include/fms_platform.h vegetation.o soil.o land_types.o numerics.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)land_lad/land_model.F90
+land_properties.o: $(SRCROOT)land_lad/soil/land_properties.F90 numerics.o climap_albedo.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)land_lad/soil/land_properties.F90
+land_types.o: $(SRCROOT)land_lad/land_types.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)land_lad/land_types.F90
+numerics.o: $(SRCROOT)land_lad/numerics.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)land_lad/numerics.F90
+rivers.o: $(SRCROOT)land_lad/soil/rivers.F90 $(SRCROOT)shared/include/fms_platform.h land_types.o land_properties.o numerics.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)land_lad/soil/rivers.F90
+soil.o: $(SRCROOT)land_lad/soil/soil.F90 rivers.o land_types.o land_properties.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)land_lad/soil/soil.F90
+vegetation.o: $(SRCROOT)land_lad/vegetation/vegetation.F90 land_types.o soil.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)land_lad/vegetation/vegetation.F90
+./rivers.F90: $(SRCROOT)land_lad/soil/rivers.F90
+	cp $(SRCROOT)land_lad/soil/rivers.F90 .
+./soil.F90: $(SRCROOT)land_lad/soil/soil.F90
+	cp $(SRCROOT)land_lad/soil/soil.F90 .
+./land_model.F90: $(SRCROOT)land_lad/land_model.F90
+	cp $(SRCROOT)land_lad/land_model.F90 .
+./fms_platform.h: $(SRCROOT)shared/include/fms_platform.h
+	cp $(SRCROOT)shared/include/fms_platform.h .
+./vegetation.F90: $(SRCROOT)land_lad/vegetation/vegetation.F90
+	cp $(SRCROOT)land_lad/vegetation/vegetation.F90 .
+./numerics.F90: $(SRCROOT)land_lad/numerics.F90
+	cp $(SRCROOT)land_lad/numerics.F90 .
+./climap_albedo.F90: $(SRCROOT)land_param/climap_albedo.F90
+	cp $(SRCROOT)land_param/climap_albedo.F90 .
+./land_properties.F90: $(SRCROOT)land_lad/soil/land_properties.F90
+	cp $(SRCROOT)land_lad/soil/land_properties.F90 .
+./land_types.F90: $(SRCROOT)land_lad/land_types.F90
+	cp $(SRCROOT)land_lad/land_types.F90 .
+SRC = $(SRCROOT)land_lad/soil/soil.F90 $(SRCROOT)land_lad/vegetation/vegetation.F90 $(SRCROOT)land_lad/land_types.F90 $(SRCROOT)land_lad/land_model.F90 $(SRCROOT)land_lad/soil/land_properties.F90 $(SRCROOT)land_param/climap_albedo.F90 $(SRCROOT)land_lad/numerics.F90 $(SRCROOT)land_lad/soil/rivers.F90 $(SRCROOT)shared/include/fms_platform.h
+OBJ = soil.o vegetation.o land_types.o land_model.o land_properties.o climap_albedo.o numerics.o rivers.o
+OFF = $(SRCROOT)land_lad/soil/rivers.F90 $(SRCROOT)land_lad/soil/soil.F90 $(SRCROOT)land_lad/land_model.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)land_lad/vegetation/vegetation.F90 $(SRCROOT)land_lad/numerics.F90 $(SRCROOT)land_param/climap_albedo.F90 $(SRCROOT)land_lad/soil/land_properties.F90 $(SRCROOT)land_lad/land_types.F90
+clean: neat
+	-rm -f .libland.a.cppdefs $(OBJ) libland.a
+
+neat:
+	-rm -f $(TMPFILES)
+
+localize: $(OFF)
+	cp $(OFF) .
+
+TAGS: $(SRC)
+	etags $(SRC)
+
+tags: $(SRC)
+	ctags $(SRC)
+
+libland.a: $(OBJ)
+	$(AR) $(ARFLAGS) libland.a $(OBJ)
+

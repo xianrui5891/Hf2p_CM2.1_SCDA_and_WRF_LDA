@@ -1,0 +1,1675 @@
+#include<fms_platform.h>
+
+module oda_driver_ecda_mod
+  !
+  ! This is the top-level module for ocean data assimilation.
+  !
+
+  ! FMS shared modules
+  use fms_mod, only : read_data, write_data, file_exist
+  use fms_mod, only : open_namelist_file, close_file, check_nml_error
+  use fms_mod, only : error_mesg, FATAL
+  use fms_io_mod, only: register_restart_field, restart_file_type, restore_state
+  use fms_io_mod, only: save_restart, file_exist
+  use mpp_mod, only : mpp_npes, stdout, stdlog, mpp_pe, mpp_declare_pelist
+  use mpp_mod, only : mpp_sync_self, mpp_sum, mpp_set_current_pelist, mpp_root_pe, mpp_set_stack_size, mpp_broadcast
+  use mpp_mod, only : mpp_clock_id, mpp_clock_begin, mpp_clock_end ! snz
+  use mpp_mod, only : CLOCK_COMPONENT, CLOCK_SUBCOMPONENT, CLOCK_MODULE, CLOCK_ROUTINE ! snz
+  use mpp_mod, only : mpp_error, NOTE, FATAL, WARNING !lulv add line
+  use mpp_memutils_mod, only : mpp_print_memuse_stats
+  use mpp_domains_mod, only : domain2d, mpp_update_domains, mpp_define_domains, mpp_global_field
+  use mpp_domains_mod, only : CYCLIC_GLOBAL_DOMAIN, BGRID_NE, FOLD_NORTH_EDGE
+  use mpp_domains_mod, only : mpp_get_compute_domain, mpp_get_data_domain, null_domain2d
+  use mpp_domains_mod, only : mpp_redistribute, mpp_broadcast_domain, mpp_update_domains
+  use diag_manager_mod, only : register_diag_field, diag_axis_init, send_data
+  use ensemble_manager_mod, only : get_ensemble_id, get_ensemble_size
+  use ensemble_manager_mod, only : get_ensemble_pelist, get_ensemble_filter_pelist
+  use time_manager_mod, only : time_type, decrement_time, increment_time, get_time, get_date !lulv add get_data 20201108
+  use constants_mod, only : radius, epsln
+
+  ! ODA Modules
+  use oda_types_mod, only : grid_type, ocean_profile_type, field_type, da_flux_type, obs_clim_type
+  use oda_core_ecda_mod, only : oda_core_init, get_obs, get_obs_sst, get_obs_suv, &
+      get_obs_eta, get_obs_woa05t, get_obs_woa05s, ocn_obs, ssh_td
+  use oda_core_ecda_tra_mod, only : oda_core_init_tra, get_obs_tra !lulv 20210629
+  use eakf_oda_mod, only : ensemble_filter, ensemble_filter_sfc
+  use eakf_oda_mod, only : ensemble_filter_sfc_hea !lulv 20201127
+  use eakf_oda_mod, only : ens_stn_filter, ens_lfq_filter, ens_hfq_filter !lulv
+
+  ! MOM Modules
+  use ocean_types_mod
+  use ocean_grids_mod, only : set_ocean_grid_size, set_ocean_hgrid_arrays, set_ocean_vgrid_arrays
+  use ocean_topog_mod, only : ocean_topog_init
+  use ocean_convect_mod, only : convection
+  use ocean_domains_mod, only : set_ocean_domain, get_local_indices
+
+  ! IDA Modules
+#ifdef ENABLE_IDA
+  use eakf_ida_dn_mod, only : ensemble_filter_sice_dn
+  use ida_types_mod, only: ida_grid_type, ida_field_type, sice_obs_type
+  use ida_core_mod, only : ida_core_init, get_sice_obs_dn, put_sice_obs_dn
+
+  ! Ice modules
+  use ice_type_mod, only: ice_data_type, hlim
+  use ice_grid_mod, only: Domain, im, jm, km, xb1d, yb1d
+#endif
+
+  implicit none
+  
+  private
+
+  integer, parameter :: NO_ASSIM = 0, OI=1, EAKF=2
+  integer, parameter :: MAX_ENSEMBLE_SIZE = 60
+  integer, parameter :: max_profiles = 50000
+  integer, parameter :: max_prog_tracers = 2 !lulv
+  !::sdu:: These should probably be in a shared module
+
+  integer :: filter_halo_x = 1, filter_halo_y = 1
+
+  integer :: asm_method = NO_ASSIM
+  character(len=8) :: assim_method = 'NO_ASSIM'
+
+  type(grid_type), target :: T_grid
+  type(grid_type), target :: T_grid_hea !lulv
+  type(domain2d), pointer  :: Asm_domain => NULL()
+  type(ocean_prog_tracer_type), allocatable, save :: T_prog0(:)
+  type(ocean_velocity_type), target :: Velocity0
+  type(ocean_prog_tracer_type), allocatable, save :: T_progi(:)
+  type(ocean_velocity_type), target :: Velocityi
+  
+
+  integer :: isc, iec, jsc, jec, isd, ied, jsd, jed
+
+  integer :: isc_i, iec_i, jsc_i, jec_i, isd_i, ied_i, jsd_i, jed_i
+
+  integer :: ni, nj, nk, nk_sice
+  integer :: num_prog_tracers
+  integer :: assim_prog_tracers ! snz
+  integer :: assim_layout(2) ! snz
+  integer :: start_da
+  character(len=64) :: fname ! snz
+
+  real, dimension(:,:,:), allocatable, save :: corr_t, corr_s
+  real, dimension(:,:,:), allocatable, save :: corr_t_stn, corr_s_stn, corr_t_lfq, corr_s_lfq, corr_t_hfq, corr_s_hfq !lulv
+  real, dimension(:,:), allocatable, save :: corr_tx, corr_ty
+  real, dimension(:,:), allocatable, save :: corr_tx_hea, corr_ty_hea !lulv
+
+  integer :: nk_asm
+  integer :: index_temp, index_salt
+
+  integer :: id_corr_t = -1
+  integer :: id_corr_s = -1
+  integer :: id_corr_t_stn = -1 !lulv
+  integer :: id_corr_s_stn = -1 !lulv
+  integer :: id_corr_t_lfq = -1 !lulv
+  integer :: id_corr_s_lfq = -1 !lulv
+  integer :: id_corr_t_hfq = -1 !lulv
+  integer :: id_corr_s_hfq = -1 !lulv
+  integer :: id_corr_tx_hea = -1 !lulv
+  integer :: id_corr_ty_hea = -1 !lulv
+  integer :: id_ens_t_stn = -1 !lulv 20201118
+  integer :: id_ens_s_stn = -1 !lulv 20201118
+  integer :: id_ens_t_lfq = -1 !lulv 20201118
+  integer :: id_ens_s_lfq = -1 !lulv 20201118
+  integer :: id_ens_t_hfq = -1 !lulv 20201118
+  integer :: id_ens_s_hfq = -1 !lulv 20201118
+  integer :: id_corr_u = -1
+  integer :: id_corr_v = -1
+  integer :: id_corr_tx = -1
+  integer :: id_corr_ty = -1
+  integer :: id_corr_tf = -1
+  integer :: id_corr_qf = -1
+  integer :: id_corr_lw = -1
+  integer :: id_corr_sw = -1
+  integer :: id_corr_eta = -1
+  integer :: id_eta_td = -1
+  
+  integer :: id_corr_t_id = -1
+  integer :: id_corr_s_id = -1
+  integer :: id_corr_u_id = -1
+  integer :: id_corr_v_id = -1
+  integer :: id_corr_t1 = -1
+  integer :: id_corr_t2 = -1
+  integer :: id_corr_ui = -1
+  integer :: id_corr_vi = -1
+
+  integer :: id_sbs_ass, id_sst_ass, id_sst_nug
+
+  integer :: pe_start(MAX_ENSEMBLE_SIZE)=0, pe_end(MAX_ENSEMBLE_SIZE)=0
+  integer :: ensemble_size = 1
+  integer :: atmos_npes_pm=1, ocean_npes_pm = 1 ! snz
+  logical, dimension(MAX_ENSEMBLE_SIZE) :: ensemble_pe = .false.
+  integer, allocatable, dimension(:,:) :: ensemble_pelist
+  integer, allocatable, dimension(:) :: ensemble_filter_pelist
+  integer :: pe, npes, npes_pm, ensemble_id, ens_siz(4)
+  logical :: sequential_filter = .false.
+  logical :: ida_dn = .false.
+  
+  integer :: isd_filt, ied_filt, jsd_filt, jed_filt
+  integer :: isc_filt, iec_filt, jsc_filt, jec_filt
+  integer :: isd_flth, ied_flth, jsd_flth, jed_flth !lulv
+  integer :: isc_flth, iec_flth, jsc_flth, jec_flth !lulv
+  logical :: stn_filter = .false. !lulv
+  logical :: lfq_filter = .false. !lulv
+  logical :: hfq_filter = .false. !lulv
+  logical :: HeEnKF = .false.     !lulv
+  integer :: hea_ens_size         !lulv
+  real :: sst_nudging_coeff = 0.0
+  logical :: sst_nudge = .false.
+  logical :: sst_filtering = .false.
+  logical :: sub_sfc_filtering = .false.
+  logical :: hfq_first_20days = .false. !lulv 20201122
+
+  real :: diff_t, dt_const
+  real :: covar_cutoff = 0.0
+  real :: beta_eta_dt = 0.0, beta_eta = 0.0
+  real :: assim_start_lat = -90.0 , assim_end_lat = 90.0
+  integer :: assim_frequency = 6 ! in hours
+
+  type(ocean_domain_type), pointer :: Dom
+  type(ocean_grid_type), pointer :: Grd
+  type(ocean_profile_type) :: Profiles(max_profiles)
+  type(ocean_profile_type) :: Profiles_tra(max_profiles) !lulv 20210629 for tra_EnKF
+
+  type(domain2d), private, save :: Filter_domain
+  type(domain2d), dimension(MAX_ENSEMBLE_SIZE), private, save :: Send_domain, Send_domain_i
+  type(field_type), dimension(MAX_ENSEMBLE_SIZE) :: temp_ens_tau, salt_ens_tau
+  type(field_type), dimension(MAX_ENSEMBLE_SIZE) :: uflx_ens, vflx_ens
+  !lulv add below
+  type(domain2d), private, save :: Hea_Filter_domain 
+  type(field_type) :: Tracer_ens_tau(max_prog_tracers, max_ensemble_size)
+  type(field_type) :: Tracer_eHe_tau(max_prog_tracers, max_ensemble_size)
+  type(field_type) :: Tracer_eHe_uflx(max_ensemble_size) !lulv
+  type(field_type) :: Tracer_eHe_vflx(max_ensemble_size) !lulv
+  type(field_type) :: Tracer_ens_stn(max_prog_tracers, max_ensemble_size) ! last member holds the climatology
+  type(field_type) :: Tracer_ens_lfq(max_prog_tracers, max_ensemble_size) ! last member holds the climatology
+  type(field_type) :: Tracer_ens_hfq(max_prog_tracers, max_ensemble_size) ! lulv add 2018/02/23
+  type(field_type) :: Tracer_lfq_clim(max_prog_tracers, max_ensemble_size) !lulv 20201105 
+  type(field_type) :: Tracer_hfq_clim(max_prog_tracers, 365) !lulv 20201108
+  type(field_type) :: T_ens(max_prog_tracers, max_ensemble_size) !lulv add 2020-04-26
+  type(field_type) :: T_ens_day(max_prog_tracers, max_ensemble_size) !lulv add 20201108
+  !lulv add above
+  logical :: ida_flag = .false.
+
+  real, dimension(:), allocatable :: zt, lat_g ,lon_g! snz 
+  real, dimension(:,:,:), allocatable :: work !lulv
+!  type(obs_clim_type) :: sst_climo
+  type(obs_clim_type) :: sst_climo_hea !lulv 20210629 for hea_EnKF
+  type(obs_clim_type) :: sst_climo_tra !lulv 20210629 for tra_EnKF
+  
+  type(restart_file_type) :: oda_driver_restart
+  character(len=*), parameter :: restart_file="oda_driver.res.nc"
+
+  public :: init_oda, oda, oda_end, write_eta_t_td, assim_frequency,corr_t_stn,&
+            & corr_s_stn, corr_t_lfq, corr_s_lfq, corr_t_hfq, corr_s_hfq !lulv
+
+contains  
+
+  subroutine init_oda(Ocn_time, Domain_ocn, Grid, T_prog)
+    ! initialize First_guess and Analysis grid and domain information
+    ! grids are identical to ocean_model grid.  Halo size may differ.
+    type(ocean_time_type), intent(in), target :: Ocn_Time
+    type(ocean_domain_type), intent(inout), target :: Domain_ocn
+    type(ocean_grid_type), intent(in), target :: Grid !< domain and grid information for ocean model
+    type(ocean_prog_tracer_type), dimension(:), intent(in) :: T_prog
+
+    integer :: n, m, k, i, j, id_day
+    integer :: ioun, io_status, ierr
+    integer :: stdout_unit
+    integer :: id_restart !< Currently not used for anything other than a return value.
+    logical :: use_ssh_as_obs
+    type(time_type), pointer :: Time
+    type(time_type)  :: time_s, time_e !< snz tries to add the time period to limit prfs num.
+
+!-----------------------------------------------------------------------
+    
+    stdout_unit = stdout()
+
+    namelist /oda_nml/ assim_method, assim_layout, assim_prog_tracers,&
+         & assim_start_lat, assim_end_lat, nk_asm, nk_sice, covar_cutoff, assim_frequency,&
+         & beta_eta_dt, beta_eta, sequential_filter, ida_dn, filter_halo_x, filter_halo_y,&
+         & sst_nudge, sst_nudging_coeff, sst_filtering, sub_sfc_filtering, stn_filter,    &
+         & lfq_filter, hfq_filter, HeEnKF, hea_ens_size, hfq_first_20days !lulv 20201122
+
+    use_ssh_as_obs = ocn_obs%use_ssh_as_obs
+
+    Dom => Domain_ocn
+    Grd => Grid
+
+    num_prog_tracers = size(T_prog)
+
+    index_temp = -1; index_salt = -1
+
+    do n=1, num_prog_tracers
+       if ( T_prog(n)%name == 'temp' ) index_temp = n
+       if ( T_prog(n)%name == 'salt' ) index_salt = n
+    end do
+
+    Time => Ocn_Time%model_time
+
+    ! snz tries to add the time period to limit prfs num.
+    !time_s = decrement_time(Ocn_Time%model_time, 0, 3)
+    !time_e = increment_time(Ocn_Time%model_time, 0, 368)
+    time_s = decrement_time(Ocn_Time%model_time, 0, 10) !lulv 20201217
+    time_e = increment_time(Ocn_Time%model_time, 0, 740)!lulv 20201217
+
+    ioun = open_namelist_file()
+    read(ioun,nml=oda_nml, iostat=io_status)
+    ierr = check_nml_error(io_status,'oda_nml')
+    call close_file(ioun)
+    write(stdout_unit, NML=oda_nml)
+
+    if ( nk_asm > Grid%nk ) nk_asm = Grid%nk
+    if ( nk_asm < 2 ) then 
+       call error_mesg('oda_driver_mod::init_oda', 'need to specify number of vertical levels for assimilation', FATAL)
+    end if
+
+    ni = Grid%ni
+    nj = Grid%nj
+    nk = Grid%nk
+
+    call mpp_get_compute_domain(Domain_ocn%domain2d, isc, iec, jsc, jec)
+    call mpp_get_data_domain(Domain_ocn%domain2d, isd, ied, jsd, jed)
+
+    T_grid%ni = ni
+    T_grid%nj = nj
+    T_grid%nk = nk
+    T_grid_hea%ni = ni !lulv
+    T_grid_hea%nj = nj !lulv
+    T_grid_hea%nk = nk !lulv
+!if(mpp_pe()==0) print*,'ni,nj,nk=', ni,nj,nk !lulv  
+!print*,'mpp_pe,isc,iec,jsc,jed=',mpp_pe(),isc,iec,jsc,jec !lulv
+!print*,'mpp_pe,isd,ied,jsd,jed=',mpp_pe(),isd,ied,jsd,jed !lulv
+!lulv add 5 lines below
+!    call mpp_global_field(Domain_ocn%domain2d, Grid%xt, T_grid%x)
+!    call mpp_global_field(Domain_ocn%domain2d, Grid%yt, T_grid%y)
+!    allocate(lon_g(ni), lat_g(nj))
+!    lon_g(:) = T_grid%x(:, nj/2)
+!    lat_g(:) = T_grid%y(ni/2, :)
+!if(mpp_pe()==0) print*,'size,lon_g=',size(lon_g),lon_g !lulv
+!if(mpp_pe()==0) print*,'size,lat_g=',size(lat_g),lat_g !lulv
+!if(mpp_pe()==0) print*,'Grid%xt(:,nj/2)=',size(Grid%xt(:,nj/2)),Grid%xt(:,nj/2) !lulv
+!if(mpp_pe()==0) print*,'Grid%yt(ni/2,:)=',size(Grid%yt(ni/2,:)),Grid%yt(ni/2,:) !lulv
+
+    allocate(work(isc:iec,jsc:jec,nk)) !lulv  
+    allocate(corr_t(isd:ied,jsd:jed,nk), corr_s(isd:ied,jsd:jed,nk))       
+    allocate(corr_tx(isd:ied,jsd:jed), corr_ty(isd:ied,jsd:jed))       
+    allocate(corr_t_stn(isd:ied,jsd:jed,nk), corr_s_stn(isd:ied,jsd:jed,nk))  !lulv
+    allocate(corr_t_lfq(isd:ied,jsd:jed,nk), corr_s_lfq(isd:ied,jsd:jed,nk))  !lulv
+    allocate(corr_t_hfq(isd:ied,jsd:jed,nk), corr_s_hfq(isd:ied,jsd:jed,nk))  !lulv
+    allocate(corr_tx_hea(isd:ied,jsd:jed), corr_ty_hea(isd:ied,jsd:jed))      !lulv
+
+    corr_t(:,:,:) = 0.0
+    corr_s(:,:,:) = 0.0
+    corr_t_stn(:,:,:) = 0.0 !lulv
+    corr_s_stn(:,:,:) = 0.0 !lulv
+    corr_t_lfq(:,:,:) = 0.0 !lulv
+    corr_s_lfq(:,:,:) = 0.0 !lulv
+    corr_t_hfq(:,:,:) = 0.0 !lulv
+    corr_s_hfq(:,:,:) = 0.0 !lulv
+    corr_tx(:,:) = 0.0
+    corr_ty(:,:) = 0.0
+    corr_tx_hea(:,:) = 0.0 !lulv
+    corr_ty_hea(:,:) = 0.0 !lulv
+
+    ! Read in restart here.
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_t", corr_t(:,:,:))
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_s", corr_s(:,:,:))
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_tx", corr_tx(:,:))
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_ty", corr_ty(:,:))
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_t_stn", corr_t_stn(:,:,:)) !lulv
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_s_stn", corr_s_stn(:,:,:)) !lulv
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_t_lfq", corr_t_lfq(:,:,:)) !lulv
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_s_lfq", corr_s_lfq(:,:,:)) !lulv
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_t_hfq", corr_t_hfq(:,:,:)) !lulv
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_s_hfq", corr_s_hfq(:,:,:)) !lulv
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_tx_hea", corr_tx_hea(:,:)) !lulv
+    id_restart = register_restart_field(oda_driver_restart, restart_file,&
+         & "corr_ty_hea", corr_ty_hea(:,:)) !lulv
+ 
+    if ( file_exist('INPUT/'//trim(restart_file)) ) then 
+       if ( mpp_pe() .eq. mpp_root_pe() ) then
+          write (stdout_unit,*) 'Reading restart information from ', 'INPUT/'//trim(restart_file)
+       end if
+       call restore_state(oda_driver_restart, DIRECTORY='INPUT')
+       call mpp_update_domains(corr_t, Domain_ocn%domain2d)
+       call mpp_update_domains(corr_s, Domain_ocn%domain2d)
+       call mpp_update_domains(corr_tx, Domain_ocn%domain2d)
+       call mpp_update_domains(corr_ty, Domain_ocn%domain2d)
+       call mpp_update_domains(corr_t_stn, Domain_ocn%domain2d) !lulv
+       call mpp_update_domains(corr_s_stn, Domain_ocn%domain2d) !lulv
+       call mpp_update_domains(corr_t_lfq, Domain_ocn%domain2d) !lulv
+       call mpp_update_domains(corr_s_lfq, Domain_ocn%domain2d) !lulv
+       call mpp_update_domains(corr_t_hfq, Domain_ocn%domain2d) !lulv
+       call mpp_update_domains(corr_s_hfq, Domain_ocn%domain2d) !lulv
+       call mpp_update_domains(corr_tx_hea, Domain_ocn%domain2d) !lulv
+       call mpp_update_domains(corr_ty_hea, Domain_ocn%domain2d) !lulv
+
+    end if
+
+    if (assim_frequency < 1) then
+       call error_mesg('oda_driver_mod::init_oda', 'invalid assim frequency', FATAL)
+    else
+       ensemble_id = get_ensemble_id()
+       ens_siz = get_ensemble_size()
+       ensemble_size = ens_siz(1)
+       npes_pm = ens_siz(3)
+       allocate(ensemble_pelist(1:ensemble_size,1:npes_pm))
+       allocate(ensemble_filter_pelist(1:ensemble_size*npes_pm))
+
+       call get_ensemble_pelist(ensemble_pelist,'ocean')
+       call get_ensemble_filter_pelist(ensemble_filter_pelist,'ocean')
+        
+       write (UNIT=stdout_unit,FMT='("Assimilating data every ",I5," timesteps")') assim_frequency
+    end if
+
+
+    select case (assim_method)
+    case ('NO_ASSIM')
+       asm_method = NO_ASSIM
+    case ('EAKF')
+       asm_method = EAKF
+    case ('OI')
+       asm_method = OI
+    end select
+
+    select case (asm_method)
+    case (EAKF)
+       ! snz add the following few lines to get the grid information for his own
+       ! purpose
+   
+       allocate(T_prog0(num_prog_tracers), T_progi(num_prog_tracers))
+
+#ifndef MOM4_STATIC_ARRAYS
+       do n=1, num_prog_tracers
+         allocate(T_prog0(n)%field(isd:ied,jsd:jed,nk,1)) 
+       end do
+#endif
+
+       call mpp_define_domains((/1,ni,1,nj/), Domain_ocn%layout, Send_domain(ensemble_id),&
+            & xflags=Domain_ocn%xflags, yflags=Domain_ocn%yflags, xhalo=Domain_ocn%xhalo,&
+            & yhalo=Domain_ocn%yhalo, name='send')
+!--------------------------
+!lulv add below
+!       call mpp_define_layout((/1,ni,1,nj/),mpp_npes(),layout)
+!       call mpp_define_domains((/1,ni,1,nj/), layout, Send_domain(ensemble_id),&
+!            xflags=Domain%xflags, yflags=Domain%yflags, xhalo = Domain%xhalo, &
+!            yhalo = Domain%yhalo, name='send')
+
+!       call mpp_define_domains((/1,ni,1,nj/), layout, Hea_Filter_domain, &
+!           & xflags=Domain_ocn%xflags, yflags=Domain_ocn%yflags, &
+!           & xhalo = filter_halo_x, yhalo = filter_halo_y, name='filter')
+!lulv change layout to Domain_ocn%layout
+       call mpp_define_domains((/1,ni,1,nj/), Domain_ocn%layout, Hea_Filter_domain, &
+           & xflags=Domain_ocn%xflags, yflags=Domain_ocn%yflags, &
+           & xhalo = filter_halo_x, yhalo = filter_halo_y, name='hea_filter') !lulv 20210613 filter to hea_filter 
+
+       call mpp_get_data_domain(Hea_Filter_domain, isd_flth,ied_flth,jsd_flth,jed_flth)
+       call mpp_get_compute_domain(Hea_Filter_domain, isc_flth,iec_flth,jsc_flth,jec_flth)
+!print*,'mpp_pe,isc_flth,iec_flth,jsc_flth,jec_flth,isd_flth,ied_flth,jsd_flth,jed_flth,=', &
+!    & mpp_pe(),isc_flth,iec_flth,jsc_flth,jec_flth,isd_flth,ied_flth,jsd_flth,jed_flth !lulv
+
+       do m = 1, hea_ens_size !hea_ens_size=20 lulv
+         allocate(Tracer_eHe_uflx(m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk)) !lulv
+         allocate(Tracer_eHe_vflx(m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk)) !lulv
+       do n = 1, num_prog_tracers
+         allocate(Tracer_eHe_tau(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk))
+         allocate(Tracer_ens_stn(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk))
+         allocate(Tracer_ens_lfq(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk))
+         allocate(Tracer_lfq_clim(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk)) !lulv 20201105
+         allocate(Tracer_ens_hfq(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk)) !lulv add 20180323
+         allocate(T_ens(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk)) !lulv add 2020/04/29
+       enddo
+       enddo
+ 
+       do m = 1, 31 !lulv change 30 to 31 20201117
+        do n = 1, num_prog_tracers
+         allocate(T_ens_day(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk)) !lulv 20201111
+         T_ens_day(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk) = 0.0 !lulv 201111
+        enddo
+       enddo
+       do m=1,365
+        do n = 1, num_prog_tracers
+          allocate(Tracer_hfq_clim(n,m)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk)) !lulv 20201108
+        enddo
+       enddo
+       !do n = 1, num_prog_tracers
+       !  allocate(Tracer_ens_stn(n,hea_ens_size+1)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk))
+       !  allocate(Tracer_ens_lfq(n,hea_ens_size+1)%data(isd_flth:ied_flth,jsd_flth:jed_flth,Grid%nk))
+       !enddo
+
+   if (stn_filter) then
+    do m = 1, hea_ens_size
+      do n = 1, num_prog_tracers
+     !if (m <= hea_ens_size) then
+        if (n == 1) then
+          call read_data('INPUT/tempa_1ym_20y_new.nc','temp_a',work,Domain_ocn%domain2d,timelevel=m)
+          Tracer_ens_stn(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+        end if !add domain information lulv
+        if (n == 2) then
+          call read_data('INPUT/salta_1ym_20y_new.nc','salt_a',work,Domain_ocn%domain2d,timelevel=m)
+          Tracer_ens_stn(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+        end if
+     !else
+      ! if (n == 1) then
+       !  call read_data('INPUT/tempc.nc','temp_c',work,Domain_ocn%domain2d)
+        ! Tracer_ens_stn(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+       !end if
+       !if (n == 2) then
+       !  call read_data('INPUT/saltc.nc','salt_c',work,Domain_ocn%domain2d)
+        ! Tracer_ens_stn(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+       !end if
+     !end if
+      end do
+    end do
+
+    do m = 1, hea_ens_size
+      do n= 1, num_prog_tracers
+        call mpp_update_domains(Tracer_ens_stn(n, m)%data(:,:,:), Hea_Filter_domain)
+      enddo
+    enddo
+   end if ! stn_filter
+
+       if (lfq_filter) then
+         do m = 1, hea_ens_size
+           do n = 1, num_prog_tracers
+             if (n == 1) then
+               call read_data('INPUT/ocean_ens.nc','ens_t_lfq',work,Domain_ocn%domain2d,timelevel=m)
+               Tracer_ens_lfq(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+             end if
+             if (n == 2) then
+               call read_data('INPUT/ocean_ens.nc','ens_s_lfq',work,Domain_ocn%domain2d,timelevel=m)
+               Tracer_ens_lfq(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+             end if
+           end do
+         end do
+
+         do m = 1, 12 !lulv 20201119
+           do n = 1, num_prog_tracers
+             if (n == 1) then
+               call read_data('INPUT/tempc.nc','temp_c',work,Domain_ocn%domain2d,timelevel=m)
+               Tracer_lfq_clim(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:) !lulv 20201105
+             end if
+             if (n == 2) then
+               call read_data('INPUT/saltc.nc','salt_c',work,Domain_ocn%domain2d,timelevel=m)
+               Tracer_lfq_clim(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:) !lulv 20201105
+             end if
+           enddo
+         enddo
+         do m = 1, hea_ens_size
+           do n= 1, num_prog_tracers
+             call mpp_update_domains(Tracer_ens_lfq(n, m)%data(:,:,:), Hea_Filter_domain)
+             call mpp_update_domains(Tracer_lfq_clim(n, m)%data(:,:,:), Hea_Filter_domain) !lulv 20201105
+           enddo
+         enddo
+       end if ! lfq_filter
+
+     if (hfq_filter) then !lulv add hfq_filter if-block 20201108
+       do m = 1, hea_ens_size
+         do n = 1, num_prog_tracers
+           if (n == 1) then !lulv add if-bolck 20201117
+             call read_data('INPUT/ocean_ens.nc','ens_t_hfq',work,Domain_ocn%domain2d,timelevel=m)
+             Tracer_ens_hfq(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+           end if !add domain information lulv
+           if (n == 2) then !lulv add if-bolck 20201117
+             call read_data('INPUT/ocean_ens.nc','ens_s_hfq',work,Domain_ocn%domain2d,timelevel=m)
+             Tracer_ens_hfq(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:)
+           end if
+           call mpp_update_domains(Tracer_ens_hfq(n, m)%data(:,:,:), Hea_Filter_domain) 
+         enddo
+       enddo
+
+       do m = 1, 365
+         do n = 1, num_prog_tracers
+           if (n == 1) then
+             call read_data('INPUT/TS_daily_clim.nc','tempc',work,Domain_ocn%domain2d,timelevel=m)
+             Tracer_hfq_clim(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:) 
+           end if
+           if (n == 2) then
+             call read_data('INPUT/TS_daily_clim.nc','saltc',work,Domain_ocn%domain2d,timelevel=m)
+             Tracer_hfq_clim(n,m)%data(isc:iec,jsc:jec,:) = work(isc:iec,jsc:jec,:) 
+           end if
+           call mpp_update_domains(Tracer_hfq_clim(n, m)%data(:,:,:), Hea_Filter_domain) 
+         end do
+       end do
+     end if ! hfq_filter
+!lulv add above
+!--------------------------
+       ! allocate ensemble_storage. Use global pelist for filter
+       call mpp_set_current_pelist(ensemble_filter_pelist(:)) ! snz
+   
+       if (HeEnKF) then !lulv at least 6 members
+       if (ensemble_size == 1) call mpp_error(FATAL,'number of ens members must be > 1 for EAKF')
+       end if
+   
+       do m=1, ensemble_size
+          call mpp_broadcast_domain(Send_domain(m))
+       end do
+
+       call mpp_define_domains((/1,ni,1,nj/), assim_layout, Filter_domain,&
+            & xflags=Domain_ocn%xflags, yflags=Domain_ocn%yflags, xhalo=filter_halo_x,&
+            & yhalo=filter_halo_y, name='filter')
+
+       if ( .NOT. sequential_filter ) then
+          call mpp_get_data_domain(Filter_domain, isd_filt, ied_filt, jsd_filt, jed_filt)
+          call mpp_get_compute_domain(Filter_domain, isc_filt, iec_filt, jsc_filt, jec_filt)       
+       end if
+
+!print*,'mpp_pe,isc_filt,iec_filt,jsc_filt,jec_filt,isd_filt,ied_filt,jsd_filt,jed_filt,=', &
+!    & mpp_pe(),isc_filt,iec_filt,jsc_filt,jec_filt,isd_filt,ied_filt,jsd_filt,jed_filt !lulv
+!!$ get the grid information 
+
+       allocate(T_grid%x(isd_filt:ied_filt,jsd_filt:jed_filt), T_grid%y(isd_filt:ied_filt,jsd_filt:jed_filt))
+       allocate(T_grid_hea%x(isd_flth:ied_flth,jsd_flth:jed_flth), T_grid_hea%y(isd_flth:ied_flth,jsd_flth:jed_flth)) !lulv
+       ! get global grid information from ocean_model
+       call mpp_redistribute(Send_domain(1), Grid%xt(:,:), Filter_domain, T_grid%x(:,:))
+       call mpp_redistribute(Send_domain(1), Grid%yt(:,:), Filter_domain, T_grid%y(:,:))
+       call mpp_update_domains(T_grid%x, Filter_domain)
+       call mpp_update_domains(T_grid%y, Filter_domain)
+
+        T_grid_hea%x(isc:iec,jsc:jec)=Grid%xt(isc:iec,jsc:jec) !lulv
+        T_grid_hea%y(isc:iec,jsc:jec)=Grid%yt(isc:iec,jsc:jec) !lulv
+
+!       call mpp_redistribute(Send_domain(1), Grid%xt(:,:), Hea_Filter_domain, T_grid_hea%x(:,:)) !lulv 2020-03-23
+!       call mpp_redistribute(Send_domain(1), Grid%yt(:,:), Hea_Filter_domain, T_grid_hea%y(:,:)) !lulv 2020-03-23
+       call mpp_update_domains(T_grid_hea%x, Hea_Filter_domain) !lulv
+       call mpp_update_domains(T_grid_hea%y, Hea_Filter_domain) !lulv
+!print*,'mpp_pe,lon=',mpp_pe(),minval(T_grid_hea%x),maxval(T_grid_hea%x) !lulv 2020-04-10
+!print*,'init_oda,mpp_pe,min_max_Grid%xt=',mpp_pe(),minval(Grid%xt),maxval(Grid%xt) !lulv 2020-04-11
+!print*,'init_oda,mpp_pe,min_max_T_grid%x=',mpp_pe(),minval(T_grid%x),maxval(T_grid%x) !lulv 2020-04-11
+!print*,'init_oda,mpp_pe,min_max_T_grid_hea%x=',mpp_pe(),minval(T_grid_hea%x),maxval(T_grid_hea%x) !lulv 2020-04-11
+!stn_filter use Grid !lulv need change 
+       allocate(lat_g(jsd_filt:jed_filt), zt(nk), T_grid%z(nk))
+       allocate(T_grid_hea%z(nk)) !lulv 20180916 for oda_core_ecda_mod line 1592 profile segment fault
+       T_grid%z(:) = Grid%zt(:)
+       T_grid_hea%z(:) = Grid%zt(:) !lulv
+
+       lat_g(jsd_filt:jed_filt) = T_grid%y(isd_filt+(ied_filt-isd_filt)/2, jsd_filt:jed_filt)
+       zt(:) = Grid%zt(:)
+
+       allocate(T_grid%mask(isd_filt:ied_filt, jsd_filt:jed_filt,nk))
+       allocate(T_grid_hea%mask(isd_flth:ied_flth, jsd_flth:jed_flth,nk)) !lulv
+       call mpp_redistribute(Send_domain(1), Grid%tmask(:,:,:), &
+            & Filter_domain, T_grid%mask(:,:,:))
+       call mpp_update_domains(T_grid%mask, Filter_domain)
+
+       T_grid_hea%mask(isc:iec,jsc:jec,:)=Grid%tmask(isc:iec,jsc:jec,:) !lulv
+!       call mpp_redistribute(Send_domain(1), Grid%tmask(:,:,:), & !lulv 2020-03-23
+!            & Hea_Filter_domain, T_grid_hea%mask(:,:,:))                  !lulv 2020-03-23
+       call mpp_update_domains(T_grid_hea%mask, Hea_Filter_domain)        !lulv
+
+       do j=jsd_filt,jed_filt
+       do i=isd_filt,ied_filt
+          if ( T_grid%y(i,j) < assim_start_lat .or. T_grid%y(i,j) > assim_end_lat ) then
+             T_grid%mask(i,j,:) = 0.0
+          end if
+       end do
+       end do
+!lulv add 7 lines below
+       do j=jsd_flth,jed_flth
+       do i=isd_flth,ied_flth
+!lulv 2020-02-25 if ( T_grid_hea%y(i,j) < assim_start_lat .or. T_grid%y(i,j) > assim_end_lat ) then
+          if ( T_grid_hea%y(i,j) < assim_start_lat .or. T_grid_hea%y(i,j) > assim_end_lat ) then !lulv 2020-02-25
+             T_grid_hea%mask(i,j,:) = 0.0
+          end if
+       end do
+       end do
+
+       !allocate(sst_climo%sst_obs(isd_filt:ied_filt, jsd_filt:jed_filt)) !lulv 20210622
+       allocate(sst_climo_hea%sst_obs(isd_flth:ied_flth, jsd_flth:jed_flth)) !lulv 20210622
+       sst_climo_hea%sst_obs(:,:) = 0.0
+       allocate(sst_climo_tra%sst_obs(isd_filt:ied_filt, jsd_filt:jed_filt)) !lulv 20210629
+       sst_climo_tra%sst_obs(:,:) = 0.0
+
+       id_sbs_ass = mpp_clock_id('(ODA SBSASS)',grain=CLOCK_SUBCOMPONENT)
+       id_sst_ass = mpp_clock_id('(ODA SSTASS)',grain=CLOCK_SUBCOMPONENT)
+       id_sst_nug = mpp_clock_id('(ODA SSTNUG)',grain=CLOCK_SUBCOMPONENT)
+
+       do m=1, ensemble_size
+          allocate(temp_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,nk))
+          allocate(salt_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,nk))
+          allocate(uflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+          allocate(vflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+
+          temp_ens_tau(m)%data(:,:,:) = 0.0
+          salt_ens_tau(m)%data(:,:,:) = 0.0
+          uflx_ens(m)%data(:,:,1:1) = 0.0
+          vflx_ens(m)%data(:,:,1:1) = 0.0
+       end do
+       call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:)) ! snz
+       ! snz tries to add the time period to limit prfs num.
+
+!       call oda_core_init(Domain_ocn%domain2d, T_grid, time_s, time_e, Filter_domain, localize=.false.)       
+       call oda_core_init(Domain_ocn%domain2d, T_grid_hea, time_s, time_e, Hea_Filter_domain, localize=.false.) !lulv 
+       call oda_core_init_tra(Domain_ocn%domain2d, T_grid, time_s, time_e, Filter_domain, localize=.false.) !lulv 20200629    
+       if ( use_ssh_as_obs ) then
+          fname = 'INPUT/eta_t_10d.res'
+          if( file_exist('INPUT/eta_t_10d.res_ens01.nc') ) then
+             start_da = 0
+             do id_day=1, ssh_td
+!!$                call read_data(trim(fname),'eta_t',eta_t_10d(:,:,id_day),&
+!!$                     & domain=Domain_ocn%domain2d,timelevel=id_day,append_pelist_name=.true.)
+           end do
+         else
+           start_da = 1
+         end if
+       end if
+    end select
+
+    id_corr_t = register_diag_field('oda', 'amf_temp', Grd%tracer_axes(1:3),&
+         & Time, 'correction for temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_corr_s = register_diag_field('oda', 'amf_salt', Grd%tracer_axes(1:3),&
+         & Time, 'correction for salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    id_corr_tx = register_diag_field('oda', 'amf_tx', Grd%vel_axes_flux_x(1:2),&
+         & Time, 'correction for u_flux', 'N/m^2', missing_value=-9999., range=(/-50.,50./))
+    id_corr_ty = register_diag_field('oda', 'amf_ty', Grd%vel_axes_flux_y(1:2),&
+         & Time, 'correction for v_flux', 'N/m^2', missing_value=-9999., range=(/-50.,50./))
+!lulv add 8 lines below
+    id_corr_t_stn = register_diag_field('oda', 'amf_temp_stn', Grd%tracer_axes(1:3),&
+         & Time, 'correction for temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_corr_s_stn = register_diag_field('oda', 'amf_salt_stn', Grd%tracer_axes(1:3),&
+         & Time, 'correction for salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    id_corr_t_lfq = register_diag_field('oda', 'amf_temp_lfq', Grd%tracer_axes(1:3),&
+         & Time, 'correction for temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_corr_s_lfq = register_diag_field('oda', 'amf_salt_lfq', Grd%tracer_axes(1:3),&
+         & Time, 'correction for salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    id_corr_t_hfq = register_diag_field('oda', 'amf_temp_hfq', Grd%tracer_axes(1:3),&
+         & Time, 'correction for temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_corr_s_hfq = register_diag_field('oda', 'amf_salt_hfq', Grd%tracer_axes(1:3),&
+         & Time, 'correction for salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    id_corr_tx_hea = register_diag_field('oda', 'amf_tx', Grd%vel_axes_flux_x(1:2),&
+         & Time, 'correction for u_flux', 'N/m^2', missing_value=-9999., range=(/-50.,50./))
+    id_corr_ty_hea = register_diag_field('oda', 'amf_ty', Grd%vel_axes_flux_y(1:2),&
+         & Time, 'correction for v_flux', 'N/m^2', missing_value=-9999., range=(/-50.,50./))
+! add id_corr_t_stn lulv 
+    !lulv 20201118 start
+    id_ens_t_stn = register_diag_field('oda', 'ens_temp_stn', Grd%tracer_axes(1:3),&
+         & Time, 'ensemble for stn temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_ens_s_stn = register_diag_field('oda', 'ens_salt_stn', Grd%tracer_axes(1:3),&
+         & Time, 'ensemble for stn salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    id_ens_t_lfq = register_diag_field('oda', 'ens_temp_lfq', Grd%tracer_axes(1:3),&
+         & Time, 'ensemble for lfq temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_ens_s_lfq = register_diag_field('oda', 'ens_salt_lfq', Grd%tracer_axes(1:3),&
+         & Time, 'ensemble for lfq salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    id_ens_t_hfq = register_diag_field('oda', 'ens_temp_hfq', Grd%tracer_axes(1:3),&
+         & Time, 'ensemble for hfq temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_ens_s_hfq = register_diag_field('oda', 'ens_salt_hfq', Grd%tracer_axes(1:3),&
+         & Time, 'ensemble for hfq salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    !lulv 20201118 end
+  end subroutine init_oda
+
+!  subroutine oda(Ocn_Time, T_prog, Velocity, flux, Ext_mode)
+  subroutine oda(Ocn_Time, T_prog, Velocity, flux, Ext_mode, ocn_end_flag) !lulv 20201118
+    type(ocean_time_type), intent(in) :: Ocn_Time
+    type(ocean_prog_tracer_type), dimension(:), intent(inout) :: T_prog
+    type(ocean_velocity_type), intent(inout) :: Velocity
+    type(da_flux_type), intent(inout) :: flux
+    type(ocean_external_mode_type), intent(inout) :: Ext_mode
+
+    real :: pre_ptmp, ptmp
+    real :: alpha, beta, alpha0, beta0, alpha1, beta1, lonn, latt ! nudging
+    real :: total_dinom = 0.0
+
+    ! snz adds a time-step index as the analysis time-step using time_step
+    integer :: kl
+    integer, intent(in) :: ocn_end_flag !lulv 20201118
+
+    integer :: assim_freq_day = 0
+    integer :: i_steps, total_steps
+    integer :: m, n, nprof, itt, tau, taup1, nprof_tra !lulv 20210629
+    integer :: second0, day0, ii0, jj0, ii, jj, kk, i, j, k
+    integer :: no_prf, no_prf_tra, no_sst, no_eta, no_suv, no_sst_tra !lulv 20210629
+    integer :: no_prf_p_sst, no_prf_p_eta, no_prf_p_suv
+    integer :: no_prf_p_sst_p_eta, no_prf_p_sst_p_suv, no_prf_p_eta_p_suv
+    integer :: no_woa05t, no_woa05s
+    integer :: stdout_unit
+!!$    integer :: num_obs_sice_dn
+
+    logical :: assim_time, used
+    logical :: use_prf_as_obs, use_woa05_t, use_woa05_s, use_sst_as_obs, use_ssh_as_obs, use_suv_as_obs
+
+    type(time_type) :: time
+
+    alpha = sst_nudging_coeff
+    beta = 1. - alpha
+    alpha0 = alpha**30
+    beta0 = 1. - alpha0
+
+    stdout_unit = stdout()
+
+    no_prf = 0
+    no_prf_tra = 0 !lulv 20210629
+    no_sst = 0
+    no_sst_tra = 0 !lulv 20210629
+    no_eta = 0
+    no_suv = 0
+
+    itt = Ocn_Time%itt
+    tau = Ocn_Time%tau
+    taup1 = Ocn_Time%taup1
+    use_prf_as_obs = ocn_obs%use_prf_as_obs
+    use_sst_as_obs = ocn_obs%use_sst_as_obs
+    use_ssh_as_obs = ocn_obs%use_ssh_as_obs
+    use_suv_as_obs = ocn_obs%use_suv_as_obs
+    use_woa05_t = ocn_obs%use_woa05_t
+    use_woa05_s = ocn_obs%use_woa05_s
+
+    Ext_mode%deta_dt(:, :) = 0.0
+
+    time = Ocn_Time%model_time
+
+    call get_time(time, second0, day0)
+    assim_time = .false.
+    if(lfq_filter)call mk_ens_lfq(time,T_prog,Tracer_ens_lfq,itt,taup1) !lulv 20201105
+    if(hfq_filter)call mk_ens_hf(time,T_prog,Tracer_ens_hfq,itt,taup1) !lulv
+!    if ( second0 == 0 .or. second0 == 43200 ) then
+    if ( mod(second0,assim_frequency*3600) == 0 ) then
+
+       select case ( asm_method )
+       case (EAKF)
+
+          assim_time = .true.
+          if ( (use_prf_as_obs) .and. (.NOT.use_woa05_t) .and. (.NOT.use_woa05_s) ) then
+             call get_obs(time, Profiles, no_prf)
+          end if
+          if ( (use_prf_as_obs) .and. (use_woa05_t) .and. (.NOT.use_woa05_s) ) then
+             call get_obs(time, Profiles, no_prf)
+             call get_obs_woa05t(time, Profiles, no_woa05t, no_prf)
+             no_prf = no_prf + no_woa05t
+          end if
+          if ( (.NOT.use_prf_as_obs) .and. (use_woa05_t) .and. (use_woa05_s) ) then
+             call get_obs_woa05t(time, Profiles, no_woa05t, no_prf)
+             no_prf = no_prf + no_woa05t
+             call get_obs_woa05s(time, Profiles, no_woa05s, no_prf)
+             no_prf = no_prf + no_woa05s
+          end if
+          if ( (use_prf_as_obs) .and. (use_woa05_t) .and. (use_woa05_s) ) then
+             call get_obs(time, Profiles, no_prf)
+             call get_obs_woa05t(time, Profiles, no_woa05t, no_prf)
+             no_prf = no_prf + no_woa05t
+             call get_obs_woa05s(time, Profiles, no_woa05s, no_prf)
+             no_prf = no_prf + no_woa05s
+          end if
+
+          if ( (use_sst_as_obs) .and. (use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo_hea, Filter_domain)
+             no_prf_p_sst = no_prf + no_sst
+             call get_obs_eta(time, Profiles, no_eta, no_prf_p_sst)
+             no_prf_p_sst_p_eta = no_prf_p_sst + no_eta
+             call get_obs_suv(time, Profiles, no_suv, no_prf_p_sst_p_eta)
+             nprof = no_prf + no_sst + no_eta + no_suv
+          end if
+          if ( (use_sst_as_obs) .and. (use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo_hea, Filter_domain)
+             no_prf_p_sst = no_prf + no_sst
+             call get_obs_eta(time, Profiles, no_eta, no_prf_p_sst)
+             nprof = no_prf + no_sst + no_eta
+          end if
+          if ( (use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo_hea, Filter_domain)
+             no_prf_p_sst = no_prf + no_sst
+             call get_obs_suv(time, Profiles, no_suv, no_prf_p_sst)
+             nprof = no_prf + no_sst + no_suv
+          end if
+          if ( (use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+!             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo, Filter_domain) !lulv
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo_hea, hea_Filter_domain) !lulv 20210622
+             nprof = no_prf + no_sst
+          end if
+
+          if ( (.NOT.use_sst_as_obs) .and. (use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_eta(time, Profiles, no_eta, no_prf)
+             no_prf_p_eta = no_prf + no_eta
+             call get_obs_suv(time, Profiles, no_suv, no_prf_p_eta)
+             nprof = no_prf + no_eta + no_suv
+          end if
+          if ( (.NOT.use_sst_as_obs) .and. (use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+             call get_obs_eta(time, Profiles, no_eta, no_prf)
+             nprof = no_prf + no_eta
+          end if
+          if ( (.NOT.use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_suv(time, Profiles, no_suv, no_prf)
+             nprof = no_prf + no_suv
+          end if
+
+          if ( (.NOT.use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+             nprof = no_prf
+          end if
+
+          if ( mpp_pe() == mpp_root_pe() ) then 
+             write (UNIT=stdout_unit, FMT='("no_suv = ",I9,", no_eta = ",I9,", no_sst = ",I9,", no_prf = ",I9)')&
+                  & no_suv, no_eta, no_sst, no_prf
+          end if
+  
+!-----------------------------------------
+!lulv add below
+          call mpp_update_domains(sst_climo_hea%sst_obs(:,:), Hea_Filter_domain) !lulv 20201130
+        if (stn_filter) then
+        do m = 1, hea_ens_size
+          Tracer_eHe_uflx(m)%data(isc:iec,jsc:jec,1) = flux%u_flux(isc:iec,jsc:jec) !lulv
+          Tracer_eHe_vflx(m)%data(isc:iec,jsc:jec,1) = flux%v_flux(isc:iec,jsc:jec) !lulv
+          do n= 1, num_prog_tracers
+            Tracer_eHe_tau(n, m)%data(isc:iec,jsc:jec,:) = T_prog(n)%field(isc:iec,jsc:jec,:,taup1)
+            call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+          enddo
+        enddo
+
+        if ( sub_sfc_filtering) then
+         call ens_stn_filter(Tracer_ens_stn(1:num_prog_tracers,1:hea_ens_size), &
+              Tracer_eHe_tau(1,1:hea_ens_size), Tracer_eHe_tau(2,1:hea_ens_size), &
+              Tracer_eHe_uflx(1:hea_ens_size), Tracer_eHe_vflx(1:hea_ens_size), &
+              Profiles, nprof, isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo_x, &
+              filter_halo_y, T_grid_hea, itt, time) !lulv Grid
+         do m = 1, hea_ens_size
+           call mpp_update_domains(Tracer_eHe_uflx(m)%data(:,:,:), Hea_Filter_domain)
+           call mpp_update_domains(Tracer_eHe_vflx(m)%data(:,:,:), Hea_Filter_domain)
+           do n = 1, num_prog_tracers
+             call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+           enddo
+         enddo
+        endif
+
+         if (sst_filtering) then !lulv 20201127 add
+           call ensemble_filter_sfc_hea(Tracer_ens_stn(1:num_prog_tracers,1:hea_ens_size),&
+                & Tracer_eHe_tau(1,1:hea_ens_size), Tracer_eHe_tau(2,1:hea_ens_size), &
+                & Tracer_eHe_uflx(1:hea_ens_size), Tracer_eHe_vflx(1:hea_ens_size), sst_climo_hea,&
+                & isc_flth,iec_flth,jsc_flth,jec_flth, filter_halo_x, filter_halo_y, T_grid_hea, time)
+         end if ! finishing sst_filtering
+
+         do m = 1, hea_ens_size
+           call mpp_update_domains(Tracer_eHe_uflx(m)%data(:,:,:), Hea_Filter_domain)
+           call mpp_update_domains(Tracer_eHe_vflx(m)%data(:,:,:), Hea_Filter_domain)
+           do n = 1, num_prog_tracers
+             call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+           enddo
+         enddo
+
+         corr_t_stn(isd:ied,jsd:jed,1:nk) =&
+              & Tracer_eHe_tau(1,1)%data(isd:ied,jsd:jed,:) - T_prog(1)%field(isd:ied,jsd:jed,1:nk,taup1)
+         corr_s_stn(isd:ied,jsd:jed,1:nk) =&
+              & Tracer_eHe_tau(2,1)%data(isd:ied,jsd:jed,:) - T_prog(2)%field(isd:ied,jsd:jed,1:nk,taup1)
+         call mpp_update_domains(corr_t_stn(isd:ied,jsd:jed,1:nk), Dom%domain2d, complete=.false.)
+         call mpp_update_domains(corr_s_stn(isd:ied,jsd:jed,1:nk), Dom%domain2d, complete=.true.)
+        !do n= 1, num_prog_tracers
+        !   T_prog(n)%field(isc:iec,jsc:jec,:,taup1) = Tracer_eHe_tau(n,1)%data(isc:iec,jsc:jec,:) ! take from identical ens
+        ! end do
+
+        ! do n= 1, num_prog_tracers
+        !   call mpp_update_domains(T_prog(n)%field(:,:,:,taup1),Dom%domain2d)
+        ! end do
+
+        end if ! stn_filter
+
+!do ensemble adjustment here and redistribute back to ensemble members
+!lfq_filter, construct an identical eHe. Coding can be refine later
+!        if ((lfq_filter) .and. (mod(day,1) == 0)) then
+        if (lfq_filter) then
+        do m = 1, hea_ens_size
+          Tracer_eHe_uflx(m)%data(isc:iec,jsc:jec,1) = flux%u_flux(isc:iec,jsc:jec) !lulv
+          Tracer_eHe_vflx(m)%data(isc:iec,jsc:jec,1) = flux%v_flux(isc:iec,jsc:jec) !lulv
+          do n= 1, num_prog_tracers
+            Tracer_eHe_tau(n, m)%data(isc:iec,jsc:jec,:) = T_prog(n)%field(isc:iec,jsc:jec,:,taup1)
+            call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+          enddo
+        enddo
+
+        if ( sub_sfc_filtering) then
+          call ens_lfq_filter(Tracer_ens_lfq(1:num_prog_tracers,1:hea_ens_size), &
+               Tracer_eHe_tau(1,1:hea_ens_size), Tracer_eHe_tau(2,1:hea_ens_size), &
+               Tracer_eHe_uflx(1:hea_ens_size), Tracer_eHe_vflx(1:hea_ens_size), &
+               Profiles, nprof, isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo_x, &
+               filter_halo_y, T_grid_hea, itt, time)
+
+           do m = 1, hea_ens_size
+             call mpp_update_domains(Tracer_eHe_uflx(m)%data(:,:,:), Hea_Filter_domain)
+             call mpp_update_domains(Tracer_eHe_vflx(m)%data(:,:,:), Hea_Filter_domain)
+             do n = 1, num_prog_tracers
+               call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+             enddo
+           enddo
+         endif
+
+         if (sst_filtering) then !lulv 20201127 add
+           call ensemble_filter_sfc_hea(Tracer_ens_lfq(1:num_prog_tracers,1:hea_ens_size),&
+                & Tracer_eHe_tau(1,1:hea_ens_size), Tracer_eHe_tau(2,1:hea_ens_size), &
+                & Tracer_eHe_uflx(1:hea_ens_size), Tracer_eHe_vflx(1:hea_ens_size), sst_climo_hea,&
+                & isc_flth,iec_flth,jsc_flth,jec_flth, filter_halo_x, filter_halo_y, T_grid_hea, time)
+         end if ! finishing sst_filtering
+
+         do m = 1, hea_ens_size
+           call mpp_update_domains(Tracer_eHe_uflx(m)%data(:,:,:), Hea_Filter_domain)
+           call mpp_update_domains(Tracer_eHe_vflx(m)%data(:,:,:), Hea_Filter_domain)
+           do n = 1, num_prog_tracers
+             call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+           enddo
+         enddo
+
+        corr_t_lfq(isd:ied,jsd:jed,1:nk) =&
+             & Tracer_eHe_tau(1,1)%data(isd:ied,jsd:jed,:) - T_prog(1)%field(isd:ied,jsd:jed,1:nk,taup1)
+        corr_s_lfq(isd:ied,jsd:jed,1:nk) =&
+             & Tracer_eHe_tau(2,1)%data(isd:ied,jsd:jed,:) - T_prog(2)%field(isd:ied,jsd:jed,1:nk,taup1)
+        call mpp_update_domains(corr_t_lfq(isd:ied,jsd:jed,1:nk), Dom%domain2d, complete=.false.)
+        call mpp_update_domains(corr_s_lfq(isd:ied,jsd:jed,1:nk), Dom%domain2d, complete=.true.)
+
+        end if ! lfq_filter
+
+! do ensemble adjustment here and redistribute back to ensemble members
+! hfq_filter
+
+        if (hfq_filter .and. (.not. hfq_first_20days)) then !lulv 20201122
+          do m=1,hea_ens_size
+            Tracer_eHe_uflx(m)%data(isc:iec,jsc:jec,1) = flux%u_flux(isc:iec,jsc:jec) !lulv
+            Tracer_eHe_vflx(m)%data(isc:iec,jsc:jec,1) = flux%v_flux(isc:iec,jsc:jec) !lulv
+            do n=1,num_prog_tracers
+              Tracer_eHe_tau(n,m)%data(isc:iec,jsc:jec,:)=T_prog(n)%field(isc:iec,jsc:jec,:,taup1) !lulv 20201123
+              call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+            enddo
+          enddo
+ 
+        if ( sub_sfc_filtering) then
+          call ens_hfq_filter(Tracer_ens_hfq(1:num_prog_tracers,1:hea_ens_size),& !lulv 20201123
+               Tracer_eHe_tau(1,1:hea_ens_size), Tracer_eHe_tau(2,1:hea_ens_size), &
+               Tracer_eHe_uflx(1:hea_ens_size), Tracer_eHe_vflx(1:hea_ens_size), &
+               Profiles, nprof, isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo_x, &
+               filter_halo_y, T_grid_hea, assim_freq_day, time)
+
+           do m = 1, hea_ens_size
+             call mpp_update_domains(Tracer_eHe_uflx(m)%data(:,:,:), Hea_Filter_domain)
+             call mpp_update_domains(Tracer_eHe_vflx(m)%data(:,:,:), Hea_Filter_domain)
+             do n = 1, num_prog_tracers
+               call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+             enddo
+           enddo
+         endif
+         if (sst_filtering) then !lulv 20201127 add
+           call ensemble_filter_sfc_hea(Tracer_ens_hfq(1:num_prog_tracers,1:hea_ens_size),&
+           !call ensemble_filter_sfc(Tracer_ens_hfq(1,1:hea_ens_size),Tracer_ens_hfq(2,1:hea_ens_size),&
+                & Tracer_eHe_tau(1,1:hea_ens_size), Tracer_eHe_tau(2,1:hea_ens_size), &
+                & Tracer_eHe_uflx(1:hea_ens_size), Tracer_eHe_vflx(1:hea_ens_size), sst_climo_hea,&
+                & isc_flth,iec_flth,jsc_flth,jec_flth, filter_halo_x, filter_halo_y, T_grid_hea, time)
+         end if ! finishing sst_filtering
+
+         do m = 1, hea_ens_size
+           call mpp_update_domains(Tracer_eHe_uflx(m)%data(:,:,:), Hea_Filter_domain)
+           call mpp_update_domains(Tracer_eHe_vflx(m)%data(:,:,:), Hea_Filter_domain)
+           do n = 1, num_prog_tracers
+             call mpp_update_domains(Tracer_eHe_tau(n, m)%data(:,:,:), Hea_Filter_domain)
+           enddo
+         enddo
+
+        corr_t_hfq(isc:iec,jsc:jec,1:nk) =&
+             & Tracer_eHe_tau(1,1)%data(isc:iec,jsc:jec,:) - T_prog(1)%field(isc:iec,jsc:jec,1:nk,taup1)
+        corr_s_hfq(isc:iec,jsc:jec,1:nk) =&
+             & Tracer_eHe_tau(2,1)%data(isc:iec,jsc:jec,:) - T_prog(2)%field(isc:iec,jsc:jec,1:nk,taup1)
+        call mpp_update_domains(corr_t_hfq(:,:,1:nk), Dom%domain2d, complete=.false.)
+        call mpp_update_domains(corr_s_hfq(:,:,1:nk), Dom%domain2d, complete=.true.)
+
+        !end if !lulv comment 20201119
+        end if ! hfq_filter
+
+        !if (sst_filtering) then !lulv add 20200926 
+        !  call mpp_update_domains(sst_climo%sst_obs(:,:), Hea_Filter_domain)
+        !  call ensemble_filter_sfc(Tracer_eHe_tau(1,1:hea_ens_size), Tracer_eHe_tau(2,1:hea_ens_size), &
+        !       & Tracer_eHe_uflx(1:hea_ens_size),Tracer_eHe_vflx(1:hea_ens_size), sst_climo, &
+        !       & isc_filt,iec_filt,jsc_filt,jec_filt, filter_halo_x, filter_halo_y, T_grid_hea, time)
+        !end if ! finishing sst_filtering
+
+
+!print*,'lulv,Dom%ioff,joff=',Dom%ioff,Dom%joff !both are 0
+!chenyuhu find taup1, change 1 to taup1
+!          corr_tx_hea(isd:ied,jsd:jed) =&
+!               & flux%u_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_tx(isd:ied,jsd:jed)
+!          corr_ty(isd:ied,jsd:jed) =&
+!               & flux%v_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_ty(isd:ied,jsd:jed)
+ 
+!          call mpp_update_domains(corr_tx(isd:ied,jsd:jed), Send_domain(ensemble_id), complete=.false.)
+!          call mpp_update_domains(corr_ty(isd:ied,jsd:jed), Send_domain(ensemble_id), complete=.true.)
+!lulv comment    if ( second0 < 43200 ) then 
+!lulv comment       diff_t = real(second0)/43200.0    !subsurface adjustment
+!lulv comment     else 
+!lulv comment      diff_t = real(second0-43200)/43200.0  !surface adjustment
+!lulv comment     end if
+!lulv comment
+!lulv comment     dt_const = (1.0 - diff_t)/3.5
+!lulv comment     
+!lulv comment     total_steps = assim_frequency*3600/7200
+!lulv comment     total_dinom = 0.0
+!lulv comment     do i_steps = 1, total_steps
+!lulv comment       total_dinom = real(total_steps-i_steps+1)/real(total_steps) + total_dinom
+!lulv comment     end do
+!lulv comment     dt_const = (assim_frequency*3600-mod(second0,assim_frequency*3600))/(assim_frequency*3600*total_dinom)
+!lulv comment
+!lulv comment     if(mpp_pe()==0) print*,'in oda_dirver, total_dinom,dt_const= ', total_dinom,dt_const
+
+!    T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+!         & T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+!         & dt_const*corr_t_stn(isd:ied,jsd:jed,1:nk)
+!    T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+!         & T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+!         & dt_const*corr_s_stn(isd:ied,jsd:jed,1:nk)
+!lulv add above
+!----------------------------------------
+        if (HeEnKF) then !lulv
+
+          if ( (use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then !lulv 20210629
+             call get_obs_sst(time, Profiles_tra, no_sst_tra, no_prf_tra, sst_climo_tra, Filter_domain)
+          end if
+          if ( (use_prf_as_obs) .and. (.NOT.use_woa05_t) .and. (.NOT.use_woa05_s) ) then
+             call get_obs_tra(time, Profiles_tra, no_prf_tra)
+             nprof_tra = no_prf_tra
+          end if
+
+          T_prog0(1)%field(:,:,:,1) = T_prog(1)%field(:,:,:,taup1) !lulv
+          T_prog0(2)%field(:,:,:,1) = T_prog(2)%field(:,:,:,taup1) !lulv
+          corr_t(isd:ied,jsd:jed,1:nk) = T_prog0(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1)
+          corr_s(isd:ied,jsd:jed,1:nk) = T_prog0(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1)
+          corr_tx(isd:ied,jsd:jed) = flux%u_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+          corr_ty(isd:ied,jsd:jed) = flux%v_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+
+          call mpp_set_current_pelist(ensemble_filter_pelist(:)) ! snz
+
+          call mpp_set_stack_size(2000000)
+
+          if ( .NOT.sequential_filter ) then
+     
+
+             do m=1, ensemble_size
+                call mpp_redistribute(Send_domain(m), T_prog0(1)%field(:,:,:,1),&
+                     & Filter_domain, temp_ens_tau(m)%data(:,:,:), complete=.false.)
+                call mpp_redistribute(Send_domain(m), T_prog0(2)%field(:,:,:,1),&
+                     & Filter_domain, salt_ens_tau(m)%data(:,:,:), complete=.true.)
+
+             end do
+             do m=1, ensemble_size
+                call mpp_redistribute(Send_domain(m), flux%u_flux(:,:),&
+                     & Filter_domain, uflx_ens(m)%data(:,:,1), complete=.false.)
+                call mpp_redistribute(Send_domain(m), flux%v_flux(:,:),&
+                     & Filter_domain, vflx_ens(m)%data(:,:,1), complete=.true.)
+             end do
+
+             T_prog0(1)%field(:,:,:,1) = 0.0
+             T_prog0(2)%field(:,:,:,1) = 0.0
+             flux%u_flux(:,:) = 0.0
+             flux%v_flux(:,:) = 0.0
+ 
+             do m=1, ensemble_size
+                call mpp_update_domains(temp_ens_tau(m)%data(:,:,:), Filter_domain, complete=.false.)
+                call mpp_update_domains(salt_ens_tau(m)%data(:,:,:), Filter_domain, complete=.true.)
+                call mpp_update_domains(uflx_ens(m)%data(:,:,1), Filter_domain, complete=.false.)
+                call mpp_update_domains(vflx_ens(m)%data(:,:,1), Filter_domain, complete=.true.)
+             end do
+             
+             ! convert potential temp to temp. gjh noticed this difference
+             do m=1, ensemble_size
+                do kk=1, nk           
+                   do jj=jsd_filt, jed_filt
+                      do ii=isd_filt, ied_filt
+                         ii0 = ii
+                         jj0 = jj
+                         call DEPTH_PRESSURE(T_grid%z(kk),T_grid%y(ii0,jj0),pre_ptmp)
+                         ptmp = sw_ptmp(salt_ens_tau(m)%data(ii,jj,kk),temp_ens_tau(m)%data(ii,jj,kk),0.,pre_ptmp)
+                         if ( temp_ens_tau(m)%data(ii,jj,kk) /= 0.0 ) then
+                            temp_ens_tau(m)%data(ii,jj,kk) = ptmp
+                         end if
+                      end do
+                   end do
+                end do
+             end do
+
+             ! do ensemble adjustment here and redistribute back to ensemble members
+             ! snz to run EAKF
+
+                if ( sub_sfc_filtering) then
+
+                   call mpp_clock_begin(id_sbs_ass)
+
+                   call ensemble_filter(temp_ens_tau(1:ensemble_size), salt_ens_tau(1:ensemble_size),&
+                        & uflx_ens(1:ensemble_size), vflx_ens(1:ensemble_size), Profiles_tra, nprof_tra,&
+                        & isc_filt,iec_filt,jsc_filt,jec_filt, filter_halo_x, filter_halo_y,&
+                        & T_grid, assim_freq_day, time)
+
+                   call mpp_clock_end(id_sbs_ass)
+
+                end if ! for sub_sfc_filtering
+
+!             else ! assimilating surface data
+                if ( second0 == 0 ) then ! sst only at this time
+
+                call mpp_update_domains(sst_climo_tra%sst_obs(:,:), Filter_domain)
+
+                if (sst_nudge) then
+
+                   call mpp_clock_begin(id_sst_nug)
+
+                   do m = 1, ensemble_size
+
+                      do j = jsc_filt, jec_filt, 1
+                         do i = isc_filt, iec_filt, 1
+                            if (abs(lat_g(j)) < 40.0 .and. abs(sst_climo_tra%sst_obs(i,j)) < 100.0) then
+                               temp_ens_tau(m)%data(i,j,1) = beta*temp_ens_tau(m)%data(i,j,1) + &
+                                    alpha*sst_climo_tra%sst_obs(i,j)
+                            end if
+                            latt = lat_g(j)
+                            alpha1 = alpha+(abs(latt)-40.0)/20.0*(alpha0-alpha)
+                            beta1 = 1.0 - alpha1
+                            if (abs(lat_g(j)) >= 40.0 .and. abs(lat_g(j)) < 60.0 .and. &
+                                 abs(sst_climo_tra%sst_obs(i,j)) < 100.0) then
+                               temp_ens_tau(m)%data(i,j,1) = beta1*temp_ens_tau(m)%data(i,j,1) + &
+                                    alpha1*sst_climo_tra%sst_obs(i,j)
+                            end if
+                         end do
+                      end do
+
+                      call mpp_update_domains(temp_ens_tau(m)%data(:,:,:), Filter_domain)
+
+                   end do
+
+                   call mpp_clock_end(id_sst_nug)
+
+                end if ! for sst_nudge
+
+                if (sst_filtering) then
+
+                   call mpp_clock_begin(id_sst_ass)
+
+                   call ensemble_filter_sfc(temp_ens_tau(1:ensemble_size), salt_ens_tau(1:ensemble_size),&
+                        & uflx_ens(1:ensemble_size), vflx_ens(1:ensemble_size), sst_climo_tra, &
+                        & isc_filt,iec_filt,jsc_filt,jec_filt, filter_halo_x, filter_halo_y, T_grid, time)
+
+                   call mpp_clock_end(id_sst_ass)
+
+                end if ! finishing sst_filtering
+
+                end if ! for sst time
+
+!             end if ! finishing filtering
+
+             ! convert temp to potential temp            
+             do m=1, ensemble_size
+                do kk=1, nk
+                   do jj=jsd_filt, jed_filt
+                      do ii=isd_filt, ied_filt
+                         ii0 = ii
+                         jj0 = jj
+                         !                      if ( ii0 <= 0 ) ii0 = ii0 + ni
+                         !                      if ( ii0 > ni ) ii0 = ii0 - ni
+                         !                      if ( jj0 <= 0 ) jj0 = 1
+                         !                      if ( jj0 > nj ) jj0 = nj
+                         call DEPTH_PRESSURE(T_grid%z(kk),T_grid%y(ii0,jj0),pre_ptmp)
+                         ptmp = sw_ptmp(salt_ens_tau(m)%data(ii,jj,kk),temp_ens_tau(m)%data(ii,jj,kk),pre_ptmp,0.) 
+                         if ( temp_ens_tau(m)%data(ii,jj,kk) /= 0.0 ) then
+                            temp_ens_tau(m)%data(ii,jj,kk) = ptmp
+                         end if
+                      end do
+                   end do
+                end do
+             end do
+
+             do m=1, ensemble_size
+                call mpp_update_domains(temp_ens_tau(m)%data(:,:,:), Filter_domain, complete=.false.)
+                call mpp_update_domains(salt_ens_tau(m)%data(:,:,:), Filter_domain, complete=.true.)
+                call mpp_update_domains(uflx_ens(m)%data(:,:,1), Filter_domain, complete=.false.)
+                call mpp_update_domains(vflx_ens(m)%data(:,:,1), Filter_domain, complete=.true.)
+             end do
+
+             do m=1, ensemble_size
+                call mpp_redistribute(Filter_domain, temp_ens_tau(m)%data(:,:,:),&
+                     & Send_domain(m), T_prog0(1)%field(:,:,:,1), complete=.false.)
+                call mpp_redistribute(Filter_domain, salt_ens_tau(m)%data(:,:,:),&
+                     & Send_domain(m), T_prog0(2)%field(:,:,:,1), complete=.true.)
+             end do
+             do m=1, ensemble_size
+                call mpp_redistribute(Filter_domain, uflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%u_flux(:,:), complete=.false.)
+                call mpp_redistribute(Filter_domain, vflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%v_flux(:,:), complete=.true.)
+             end do
+
+          end if ! finish analysis process
+
+          call mpp_sync_self()
+          call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
+
+          corr_t(isd:ied,jsd:jed,1:nk) =&
+               & T_prog0(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1) - corr_t(isd:ied,jsd:jed,1:nk)
+          corr_s(isd:ied,jsd:jed,1:nk) =&
+               & T_prog0(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1) - corr_s(isd:ied,jsd:jed,1:nk)
+          corr_tx(isd:ied,jsd:jed) =&
+               & flux%u_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_tx(isd:ied,jsd:jed)
+          corr_ty(isd:ied,jsd:jed) =&
+               & flux%v_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_ty(isd:ied,jsd:jed)
+ 
+          call mpp_update_domains(corr_t(isd:ied,jsd:jed,1:nk), Send_domain(ensemble_id), complete=.false.)
+          call mpp_update_domains(corr_s(isd:ied,jsd:jed,1:nk), Send_domain(ensemble_id), complete=.true.)
+          call mpp_update_domains(corr_tx(isd:ied,jsd:jed), Send_domain(ensemble_id), complete=.false.)
+          call mpp_update_domains(corr_ty(isd:ied,jsd:jed), Send_domain(ensemble_id), complete=.true.)
+
+          do k = 1, nk
+             do j = jsd, jed
+                do i = isd, ied
+                   if (abs(corr_t(i,j,k)) < 1.e-10) corr_t(i,j,k) = 0.0
+                   if (abs(corr_s(i,j,k)) < 1.e-10) corr_s(i,j,k) = 0.0
+                end do
+             end do
+          end do
+          do j = jsd, jed
+             do i = isd, ied
+                if (abs(corr_tx(i,j)) < 1.e-10) corr_tx(i,j) = 0.0
+                if (abs(corr_ty(i,j)) < 1.e-10) corr_ty(i,j) = 0.0
+             end do
+          end do
+        end if !if(HeEnKF)
+       end select
+
+       if ( id_corr_t > 0 ) used = send_data(id_corr_t,corr_t(isc:iec,jsc:jec,:),&
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+       if ( id_corr_s > 0 ) used = send_data(id_corr_s,corr_s(isc:iec,jsc:jec,:),&
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+       if ( id_corr_t_stn > 0 ) used = send_data(id_corr_t_stn,corr_t_stn(isc:iec,jsc:jec,:),& !lulv
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))     !lulv
+!       if ( id_corr_t_stn > 0 ) used = send_data(id_corr_t_stn,Tracer_eHe_tau(1,1)%data(isc:iec,jsc:jec,:),& !lulv
+!            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))     !lulv
+       if ( id_corr_s_stn > 0 ) used = send_data(id_corr_s_stn,corr_s_stn(isc:iec,jsc:jec,:),& !lulv
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))     !lulv
+       if ( id_corr_t_lfq > 0 ) used = send_data(id_corr_t_lfq,corr_t_lfq(isc:iec,jsc:jec,:),& !lulv
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))     !lulv
+       if ( id_corr_s_lfq > 0 ) used = send_data(id_corr_s_lfq,corr_s_lfq(isc:iec,jsc:jec,:),& !lulv
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))     !lulv
+       if ( id_corr_t_hfq > 0 ) used = send_data(id_corr_t_hfq,corr_t_hfq(isc:iec,jsc:jec,:),& !lulv
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))     !lulv
+       if ( id_corr_s_hfq > 0 ) used = send_data(id_corr_s_hfq,corr_s_hfq(isc:iec,jsc:jec,:),& !lulv
+            & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))     !lulv
+       if ( id_corr_tx > 0 ) used = send_data(id_corr_tx,corr_tx(isc:iec,jsc:jec),&
+            & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+       if ( id_corr_ty > 0 ) used = send_data(id_corr_ty,corr_ty(isc:iec,jsc:jec),&
+            & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+       if ( id_corr_tx_hea > 0 ) used = send_data(id_corr_tx_hea,corr_tx_hea(isc:iec,jsc:jec),&!lulv
+            & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))     !lulv
+       if ( id_corr_ty_hea > 0 ) used = send_data(id_corr_ty_hea,corr_ty_hea(isc:iec,jsc:jec),&!lulv
+            & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))     !lulv
+      !lulv 20201118 start
+       if(ocn_end_flag==1) then
+        do m =1,hea_ens_size+1 !fail to use hea_ada_ens_size, not know why,succeseed to plus 1 
+         if (stn_filter .and. id_ens_t_stn > 0 ) used = send_data(id_ens_t_stn,Tracer_ens_stn(1,m)%data(isc:iec,jsc:jec,:),& 
+                         & increment_time(Time,0,m),rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))  
+         if (stn_filter .and. id_ens_s_stn > 0 ) used = send_data(id_ens_s_stn,Tracer_ens_stn(2,m)%data(isc:iec,jsc:jec,:),& 
+                         & increment_time(Time,0,m),rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))  
+         if (lfq_filter .and. id_ens_t_lfq > 0 ) used = send_data(id_ens_t_lfq,Tracer_ens_lfq(1,m)%data(isc:iec,jsc:jec,:),&
+                         & increment_time(Time,0,m),rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+         if (lfq_filter .and. id_ens_s_lfq > 0 ) used = send_data(id_ens_s_lfq,Tracer_ens_lfq(2,m)%data(isc:iec,jsc:jec,:),&
+                         & increment_time(Time,0,m),rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+         if (hfq_filter .and. id_ens_t_hfq > 0 ) used = send_data(id_ens_t_hfq,Tracer_ens_hfq(1,m)%data(isc:iec,jsc:jec,:),&
+                         & increment_time(Time,0,m),rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+         if (hfq_filter .and. id_ens_s_hfq > 0 ) used = send_data(id_ens_s_hfq,Tracer_ens_hfq(2,m)%data(isc:iec,jsc:jec,:),&
+                         & increment_time(Time,0,m),rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+        enddo
+       endif
+      !lulv 20201118 start
+    end if ! for mod(second0,assim_frequency*3600) == 0
+
+
+  if(heEnKF) then
+     if ( second0 < 43200 ) then
+       diff_t = real(second0)/43200.0    !subsurface adjustment
+     else
+      diff_t = real(second0-43200)/43200.0  !surface adjustment
+     end if
+
+     dt_const = (1.0 - diff_t)/3.5
+     
+     total_steps = assim_frequency*3600/7200
+     total_dinom = 0.0
+     do i_steps = 1, total_steps
+       total_dinom = real(total_steps-i_steps+1)/real(total_steps) + total_dinom
+     end do
+     dt_const = (assim_frequency*3600-mod(second0,assim_frequency*3600))/(assim_frequency*3600*total_dinom)
+
+!     print*,'total_dinom,dt_const= ', total_dinom,dt_const !lulv comment
+    T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+         & T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+         & dt_const*corr_t(isd:ied,jsd:jed,1:nk)
+    T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+         & T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+         & dt_const*corr_s(isd:ied,jsd:jed,1:nk)
+
+    flux%u_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = dt_const*corr_tx(isd:ied,jsd:jed)
+    flux%v_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = dt_const*corr_ty(isd:ied,jsd:jed)
+  end if
+    return
+  end subroutine oda
+
+  subroutine write_eta_t_td()
+
+    integer :: id_day
+    logical :: use_ssh_as_obs
+
+    use_ssh_as_obs = ocn_obs%use_ssh_as_obs
+
+    if ( use_ssh_as_obs .and. ssh_td > 1 ) then
+       fname = 'RESTART/eta_t_10d.res'
+       do id_day=1, ssh_td
+!!$          call write_data(trim(fname),'eta_t',eta_t_10d(:,:,id_day),&
+!!$               & domain=Dom%domain2d,append_pelist_name= .true.)
+       end do
+    end if
+  end subroutine write_eta_t_td
+
+  subroutine DEPTH_PRESSURE(DEPTH, LAT, PRE)
+    ! compute pressure given depth at some latitude
+    ! The UK's National Measurement Laboratory (http://www.npl.co.uk/acoustics/techguides/soundseawater/)
+    !
+    !
+    !     units:
+    !           depth      depth    meter
+    !           pressure   pre      dbar
+    !           latitude   lat     deg
+    !
+    real, intent(in)  :: DEPTH, LAT
+    real, intent(out) :: PRE
+
+    real  :: DEG2RAD, X, AA,BB,CC
+
+    DEG2RAD = atan(1.0)*4.0*abs(LAT)/180.0    ! convert to radians
+    X       = sin(DEG2RAD)    
+    AA      = 9.7803*(1.0+5.3e-3*X*X)
+    BB      = (AA-2.0e-5*DEPTH)/(9.80612-2.0e-5*DEPTH)
+    CC      = (((2.8e-19*DEPTH-1.25e-13)*DEPTH+2.465e-8)*DEPTH+1.00818e-2)*DEPTH
+    PRE     = CC*BB*1.e2
+
+    return
+  end subroutine DEPTH_PRESSURE
+
+  real function sw_ptmp(S, T, P, PR)
+    ! DESCRIPTION:
+    !    Calculates potential temperature as per UNESCO 1983 report.
+    !   
+    ! INPUT:  (all must have same dimensions)
+    !   S  = salinity    [psu      (PSS-78) ]
+    !   T  = temperature [degree C (IPTS-68)]
+    !   P  = pressure    [db]
+    !   PR = Reference pressure  [db]
+    !
+    ! OUTPUT:
+    !   sw_ptmp = Potential temperature relative to PR [degree C (IPTS-68)]
+    !
+    real, intent(in) :: S, T, P, PR
+
+    real :: adtg, del_P, del_th, th, q
+
+    ! theta1
+    adtg=sw_adtg(S, T, P)
+    del_P  = PR - P
+    del_th = del_P*adtg
+    th     = T + 0.5*del_th
+    q      = del_th
+
+    ! theta2
+    adtg=sw_adtg(S,th,P+0.5*del_P)
+    del_th = del_P*adtg
+    th     = th + (1.0 - 1.0/sqrt(2.0))*(del_th - q)
+    q      = (2.0-sqrt(2.0))*del_th + (-2.0+3.0/sqrt(2.0))*q
+
+    ! theta3
+    adtg=sw_adtg(S,th,P+0.5*del_P)
+    del_th = del_P*adtg
+    th     = th + (1.0 + 1.0/sqrt(2.0))*(del_th - q)
+    q      = (2.0 + sqrt(2.0))*del_th + (-2.0-3.0/sqrt(2.0))*q
+
+    ! theta4
+    adtg=sw_adtg(S,th,P+del_P)
+    del_th = del_P*adtg
+
+    sw_ptmp   = th + (del_th - 2.0*q)/6.0
+    return
+  end function sw_ptmp
+
+  real function sw_adtg(S, T, P)
+    ! DESCRIPTION:
+    !    Calculates adiabatic temperature gradient as per UNESCO 1983 routines.
+    ! INPUT:
+    !   S = salinity    [psu      (PSS-78) ]
+    !   T = temperature [degree C (IPTS-68)]
+    !   P = pressure    [db]
+    !
+    ! OUTPUT:
+    !   sw_adtg = adiabatic temperature gradient [degree_C/db]
+    !
+    real, intent(in) :: S, T, P
+
+    real :: adtg, a0, a1, a2, a3, b0, b1, c0, c1, c2, c3, d0, d1, e0, e1, e2
+    a0 =  3.5803E-5
+    a1 = +8.5258E-6
+    a2 = -6.836E-8
+    a3 =  6.6228E-10
+
+    b0 = +1.8932E-6
+    b1 = -4.2393E-8
+
+    c0 = +1.8741E-8
+    c1 = -6.7795E-10
+    c2 = +8.733E-12
+    c3 = -5.4481E-14
+
+    d0 = -1.1351E-10
+    d1 =  2.7759E-12
+
+    e0 = -4.6206E-13
+    e1 = +1.8676E-14
+    e2 = -2.1687E-16
+
+    sw_adtg = a0 + (a1 + (a2 + a3*T)*T)*T +&
+         & (b0 + b1*T)*(S-35) +&
+         & ( (c0 + (c1 + (c2 + c3*T)*T)*T) + (d0 + d1*T)*(S-35) )*P +&
+         & (  e0 + (e1 + e2*T)*T )*P*P
+    return
+  end function sw_adtg
+
+  subroutine oda_end()
+
+    integer :: m
+
+    call save_restart(oda_driver_restart)
+
+    if ( associated(T_grid%x) ) then
+       deallocate(T_grid%x)
+       nullify(T_grid%x)
+    end if
+    if ( associated(T_grid%y) ) then
+       deallocate(T_grid%y)
+       nullify(T_grid%y)
+    end if
+    if ( associated(T_grid%z) ) then
+       deallocate(T_grid%z)
+       nullify(T_grid%z)
+    end if
+    if ( associated(T_grid%mask) ) then
+       deallocate(T_grid%mask)
+       nullify(T_grid%mask)
+    end if
+
+
+    if ( allocated(corr_t) ) deallocate(corr_t)
+    if ( allocated(corr_s) ) deallocate(corr_s)
+    if ( allocated(corr_tx) ) deallocate(corr_tx)
+    if ( allocated(corr_ty) ) deallocate(corr_ty)
+
+    if ( associated(sst_climo_hea%sst_obs) ) then
+       deallocate(sst_climo_hea%sst_obs)
+       nullify(sst_climo_hea%sst_obs)
+    end if
+    if ( associated(sst_climo_tra%sst_obs) ) then !lulv 20210629
+       deallocate(sst_climo_tra%sst_obs)
+       nullify(sst_climo_tra%sst_obs)
+    end if
+
+    do m=1, ensemble_size
+       if ( associated(temp_ens_tau(m)%data) ) then
+          deallocate(temp_ens_tau(m)%data)
+          nullify(temp_ens_tau(m)%data)
+       end if
+       if ( associated(salt_ens_tau(m)%data) ) then
+          deallocate(salt_ens_tau(m)%data)
+          nullify(salt_ens_tau(m)%data)
+       end if
+
+
+       if ( associated(uflx_ens(m)%data) ) then
+          deallocate(uflx_ens(m)%data)
+          nullify(uflx_ens(m)%data)
+       end if
+       if ( associated(vflx_ens(m)%data) ) then
+          deallocate(vflx_ens(m)%data)
+          nullify(vflx_ens(m)%data)
+       end if
+
+    end do
+  end subroutine oda_end
+
+  !lulv add below
+  subroutine mk_ens_hf(time,T_prog, T_ens_tau, it_step, taup1)
+  !chenyuhu find need add taup1
+  type(ocean_prog_tracer_type), intent(in) :: T_prog(:)
+  type(field_type), intent(inout) :: T_ens_tau(:, :)
+  type(time_type) :: time !lulv 20201108
+  integer, dimension(12) :: n_days !lulv 20201108
+  integer, intent(in)  :: it_step
+  integer  :: n, m,taup1, i, i_a, i_b  !lulv
+  integer :: iy0, in0, id0, ih0, im0, is0, day_idx !lulv 20201108
+
+  if(it_step == 0) call mpp_error(FATAL)
+  !lulv add 11 lines below 20201108
+    n_days = (/ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 /) ! Days in month
+  !lulv add 2020-04-26 start
+  i_a=mod(it_step,12); if(i_a==0) i_a=12
+  do n=1, num_prog_tracers
+    T_ens(n,i_a)%data(isc:iec,jsc:jec,:)=T_prog(n)%field(isc:iec,jsc:jec,:,taup1)
+  enddo
+
+  i_b=it_step/12
+
+  if(i_a==12) then
+    call get_date(decrement_time(time,60,0), iy0, in0, id0, ih0, im0, is0) 
+    if(in0==1) then 
+      day_idx = id0
+    else 
+      day_idx=0
+      do i=1, in0-1
+        day_idx = day_idx + n_days(i)
+      enddo 
+      day_idx = day_idx + id0
+    endif
+    !if(mpp_pe()==0) write(*,'("in oda mk_ens_hf,iy0,in0,id0,ih0,day_idx=",1xi4,1xi2,1xi2,1xi2,1xi4)') iy0,in0,id0,ih0,day_idx
+    if(mpp_pe()==0)print*,'in oda mk_ens_hf,in0,id0,ih0,day_idx,i_b=',in0,id0,ih0,day_idx,i_b !lulv 20201109
+ 
+    if(hfq_first_20days .and. i_b<=hea_ens_size) then
+       !if(i_b<=hea_ens_size) then
+       do n=1, num_prog_tracers
+         T_ens_tau(n,i_b)%data(isc:iec,jsc:jec,:) = 0.0
+         do i=1,12 
+           T_ens_tau(n,i_b)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,i_b)%data(isc:iec,jsc:jec,:)+T_ens(n,i)%data(isc:iec,jsc:jec,:)*1./12
+         enddo
+         T_ens_tau(n,i_b)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,i_b)%data(isc:iec,jsc:jec,:) &
+                                                    - Tracer_hfq_clim(n,day_idx)%data(isc:iec,jsc:jec,:) !lulv 20201108
+       enddo
+       if(i_b==hea_ens_size) hfq_first_20days=.false.
+    else !i_b > hea_ens_size
+    if(mpp_pe()==0)print*,'in oda mk_ens_hf,i_b,day_idx=',i_b,day_idx
+      do n=1, num_prog_tracers
+        do m =1 , hea_ens_size-1
+          T_ens_tau(n,m)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,m+1)%data(isc:iec,jsc:jec,:)
+        enddo
+        T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) = 0.0
+        do i=1,12
+          T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:)+T_ens(n,i)%data(isc:iec,jsc:jec,:)*1./12
+        enddo
+        !if(mpp_pe()==0)print*,'in oda mk_ens_hf,in0,id0,day_idx=',in0,id0,day_idx !lulv 20201109
+        T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) &
+                                                            - Tracer_hfq_clim(n,day_idx)%data(isc:iec,jsc:jec,:) !lulv 20201108
+      enddo
+    endif
+  endif
+
+  do m = 1, hea_ens_size
+    do n= 1, num_prog_tracers
+      call mpp_update_domains(T_ens_tau(n, m)%data(:,:,:),Hea_Filter_domain) !lulv 20201108
+    enddo
+  enddo
+   !lulv add 2020-04-26 end
+  end subroutine mk_ens_hf
+  !lulv add above
+  !lulv add below 20201105
+  subroutine mk_ens_lfq(time,T_prog, T_ens_tau, it_step, taup1)
+  type(ocean_prog_tracer_type), intent(in) :: T_prog(:)
+  type(field_type), intent(inout) :: T_ens_tau(:, :)
+  type(time_type) :: time
+  integer, intent(in)  :: it_step
+  integer  :: n, m,taup1, i, i_a, i_b,i_c,i_e  !lulv
+  integer  :: iy0,in0,id0, ih0, im0, is0 
+  integer, save :: step=0 !lulv 20201117
+  integer, dimension(12) :: n_days !lulv 20201117
+
+  n_days = (/ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 /) ! Days in month
+
+  if(it_step == 0) call mpp_error(FATAL) 
+  call get_date(decrement_time(time,60,0), iy0, in0, id0, ih0, im0, is0)
+  !it's Feb-1 00:00 instead of Jan-31 24:00 when it_step=48*31, so do decrement
+  !for time,let in0=1 when it_step=48*31 lulv 20201117
+
+  i_a=mod(it_step,12); if(i_a==0) i_a=12
+  do n=1, num_prog_tracers
+    T_ens(n,i_a)%data(isc:iec,jsc:jec,:)=T_prog(n)%field(isc:iec,jsc:jec,:,taup1)
+  enddo
+
+!  if(it_step<=12*30) then 
+!    i_c=ceiling(it_step/12.0)
+!  else 
+!    i_e=ceiling(it_step/12.0)
+!    i_c=mod(i_e,30)
+!    if(i_c==0) i_c=30
+!  endif
+  if(i_a==12) then
+  if(mpp_pe()==0)print*,'in oda mk_ens_lfq,it_step,in0,id0,ih0=',it_step,in0,id0,ih0 !lulv 20201117
+    do n=1, num_prog_tracers
+      T_ens_day(n,id0)%data(isc:iec,jsc:jec,:) = 0.0
+      do i=1,12 
+        T_ens_day(n,id0)%data(isc:iec,jsc:jec,:) = T_ens_day(n,id0)%data(isc:iec,jsc:jec,:)+T_ens(n,i)%data(isc:iec,jsc:jec,:)*1./12
+      enddo
+    enddo
+  endif
+
+  i_b=it_step-step
+  i_c=12*n_days(in0)
+  if((it_step-step) == 12*n_days(in0)) then
+    if(mpp_pe()==0) print*,'in oda mk_ens_lfq,it_step,step=',it_step,step !lulv 20201117
+    do n=1, num_prog_tracers
+      do m =1 , hea_ens_size-1
+        T_ens_tau(n,m)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,m+1)%data(isc:iec,jsc:jec,:)
+      enddo
+      T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) = 0.0
+      do i=1,n_days(in0)
+        T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:)+T_ens_day(n,i)%data(isc:iec,jsc:jec,:)*1./n_days(in0)
+      enddo
+      T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) = T_ens_tau(n,hea_ens_size)%data(isc:iec,jsc:jec,:) - Tracer_lfq_clim(n,in0)%data(isc:iec,jsc:jec,:) 
+    enddo
+
+    do m = 1, hea_ens_size
+      do n= 1, num_prog_tracers
+        call mpp_update_domains(T_ens_tau(n, m)%data(:,:,:),Hea_Filter_domain)
+      enddo
+    enddo
+    step = step + 12*n_days(in0) !lulv 20201117
+  endif
+ end subroutine mk_ens_lfq
+  !lulv add above 20201105
+end module oda_driver_ecda_mod

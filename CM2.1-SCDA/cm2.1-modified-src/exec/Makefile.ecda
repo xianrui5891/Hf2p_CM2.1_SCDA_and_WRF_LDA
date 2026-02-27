@@ -1,0 +1,1440 @@
+# Makefile created by mkmf 2022.01.00
+
+SRCROOT = /home/ouc/zhuxianrui/CM2-f2py/CM2.1-python/src_v5.0/
+
+CPPDEFS = -DMAX_LINKS_=10 -DENABLE_ECDA -Duse_netCDF -Duse_libMPI -DSPMD -DLAND_BND_TRACERS -DUSE_OCEAN_BGC -Duse_shared_pointers -DNI_=360 -DNJ_=200 -DNK_=50 -DNI_LOCAL_=60 -DNJ_LOCAL_=40 -DENABLE_ODA -DENABLE_ADA -DENABLE_IDA -from-rtn1 -to-rtn999
+
+MK_TEMPLATE = /home/ouc/zhuxianrui/CM2-f2py/CM2.1-python/exec/intel.mk
+include $(MK_TEMPLATE)
+
+
+.DEFAULT:
+	-echo $@ does not exist.
+all: libecda.a
+FMS_coupler_util.o: $(SRCROOT)ocean_shared/generic_tracers/FMS_coupler_util.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ocean_shared/generic_tracers/FMS_coupler_util.F90
+FMS_ocmip2_co2calc.o: $(SRCROOT)ocean_shared/generic_tracers/FMS_ocmip2_co2calc.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ocean_shared/generic_tracers/FMS_ocmip2_co2calc.F90
+ada_core.o: $(SRCROOT)ada/ada_core.F90 ada_types.o bgrid_vert.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ada/ada_core.F90
+ada_types.o: $(SRCROOT)ada/ada_types.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ada/ada_types.F90
+adv_center.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/adv_center.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/adv_center.F90
+aer_ccn_act.o: $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act.F90 aer_ccn_act_k.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act.F90
+aer_ccn_act_k.o: $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act_k.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act_k.F90
+aer_in_act.o: $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_in_act.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_in_act.F90
+aerosol.o: $(SRCROOT)atmos_param/sea_esf_rad/aerosol.F90 interpolator.o rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/aerosol.F90
+aerosolrad_package.o: $(SRCROOT)atmos_param/sea_esf_rad/aerosolrad_package.F90 interpolator.o rad_utilities.o esfsw_parameters.o longwave_params.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/aerosolrad_package.F90
+age_of_air.o: $(SRCROOT)atmos_fv_dynamics/tools/age_of_air.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/age_of_air.F90
+algebraiclength.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/algebraiclength.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/algebraiclength.F90
+alpha_mnb.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/alpha_mnb.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/alpha_mnb.F90
+assim_tools.o: $(SRCROOT)ecda/shared/eakf_sup/assim_tools.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/eakf_sup/assim_tools.F90
+atmos_age_tracer.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_age_tracer.F90 interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_age_tracer.F90
+atmos_carbon_aerosol.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_carbon_aerosol.F90 atmos_tracer_utilities.o interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_carbon_aerosol.F90
+atmos_ch3i.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_ch3i.F90 interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_ch3i.F90
+atmos_co2.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_co2.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_co2.F90
+atmos_convection_tracer.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_convection_tracer.F90 atmos_tracer_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_convection_tracer.F90
+atmos_dust.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_dust.F90 atmos_tracer_utilities.o interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_dust.F90
+atmos_model.o: $(SRCROOT)atmos_coupled/atmos_model.F90 diag_integral.o atmosphere.o ada_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_coupled/atmos_model.F90
+atmos_nudge.o: $(SRCROOT)atmos_shared/atmos_nudge/atmos_nudge.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/atmos_nudge/atmos_nudge.F90
+atmos_radon.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_radon.F90 atmos_tracer_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_radon.F90
+atmos_sea_salt.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_sea_salt.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_sea_salt.F90
+atmos_soa.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_soa.F90 interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_soa.F90
+atmos_sulfate.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfate.F90 interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_sulfate.F90
+atmos_sulfur_hex.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfur_hex.F90 atmos_tracer_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_sulfur_hex.F90
+atmos_tracer_driver.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_driver.F90 atmos_tracer_utilities.o atmos_radon.o atmos_carbon_aerosol.o atmos_convection_tracer.o atmos_sulfur_hex.o atmos_ch3i.o atmos_sea_salt.o atmos_dust.o atmos_sulfate.o atmos_soa.o tropchem_driver.o strat_chem_driver.o atmos_age_tracer.o atmos_co2.o interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_driver.F90
+atmos_tracer_utilities.o: $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_utilities.F90 monin_obukhov.o interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_utilities.F90
+atmosphere.o: $(SRCROOT)atmos_fv_dynamics/driver/coupled/atmosphere.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc fv_physics.o fv_pack.o fv_diagnostics.o timingModule.o fv_restart.o fv_dynamics.o fv_arrays.o ada_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/driver/coupled/atmosphere.F90
+betaDistribution.o: $(SRCROOT)atmos_param/cloud_generator/null/betaDistribution.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cloud_generator/null/betaDistribution.F90
+betts_miller.o: $(SRCROOT)atmos_param/betts_miller/betts_miller.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/betts_miller/betts_miller.F90
+bgrid_horiz.o: $(SRCROOT)ecda/shared/bgrid/bgrid_horiz.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/bgrid/bgrid_horiz.F90
+bgrid_vert.o: $(SRCROOT)ecda/shared/bgrid/bgrid_vert.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/bgrid/bgrid_vert.F90
+bm_massflux.o: $(SRCROOT)atmos_param/betts_miller/bm_massflux.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/betts_miller/bm_massflux.F90
+bm_omp.o: $(SRCROOT)atmos_param/betts_miller/bm_omp.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/betts_miller/bm_omp.F90
+bulkphys_rad.o: $(SRCROOT)atmos_param/sea_esf_rad/null/bulkphys_rad.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/bulkphys_rad.F90
+cg_drag.o: $(SRCROOT)atmos_param/cg_drag/null/cg_drag.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cg_drag/null/cg_drag.F90
+cloud_generator.o: $(SRCROOT)atmos_param/cloud_generator/null/cloud_generator.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cloud_generator/null/cloud_generator.F90
+cloud_obs.o: $(SRCROOT)atmos_param/cloud_obs/null/cloud_obs.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cloud_obs/null/cloud_obs.F90
+cloud_rad.o: $(SRCROOT)atmos_param/cloud_rad/cloud_rad.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cloud_rad/cloud_rad.F90
+cloud_spec.o: $(SRCROOT)atmos_param/sea_esf_rad/cloud_spec.F90 cloud_generator.o rad_utilities.o esfsw_parameters.o strat_clouds_W.o diag_clouds_W.o zetac_clouds_W.o specified_clouds_W.o rh_based_clouds.o donner_deep_clouds_W.o uw_clouds_W.o mgrp_prscr_clds.o standalone_clouds.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/cloud_spec.F90
+cloud_zonal.o: $(SRCROOT)atmos_param/cloud_zonal/null/cloud_zonal.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cloud_zonal/null/cloud_zonal.F90
+cloudrad_diagnostics.o: $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_diagnostics.F90 rad_utilities.o esfsw_parameters.o microphys_rad.o isccp_clouds.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/cloudrad_diagnostics.F90
+cloudrad_package.o: $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_package.F90 rad_utilities.o esfsw_parameters.o cloudrad_diagnostics.o bulkphys_rad.o microphys_rad.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/cloudrad_package.F90
+clouds.o: $(SRCROOT)atmos_param/clouds/null/clouds.F90 cloud_rad.o cloud_zonal.o cloud_obs.o rh_clouds.o strat_cloud.o diag_cloud.o isccp_clouds.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/clouds/null/clouds.F90
+cmue_a.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_a.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_a.F90
+cmue_b.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_b.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_b.F90
+cmue_c.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_c.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_c.F90
+cmue_d.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_d.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_d.F90
+cmue_ma.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_ma.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_ma.F90
+cmue_rf.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_rf.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_rf.F90
+cmue_sg.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_sg.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_sg.F90
+co2_data.o: $(SRCROOT)atmos_param/fsrad/null/co2_data.F90 fs_profile.o co2int.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/co2_data.F90
+co2int.o: $(SRCROOT)atmos_param/fsrad/null/co2int.F90 fs_profile.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/co2int.F90
+compute_cpsi3.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_cpsi3.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_cpsi3.F90
+compute_rist.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_rist.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_rist.F90
+convert_fluxes.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/convert_fluxes.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h eqstate.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/convert_fluxes.F90
+cosp_driver.o: $(SRCROOT)atmos_param/cosp/null/cosp_driver.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cosp/null/cosp_driver.F90
+cov_cutoff.o: $(SRCROOT)ecda/shared/eakf_sup/cov_cutoff.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/eakf_sup/cov_cutoff.F90
+cu_mo_trans.o: $(SRCROOT)atmos_param/cu_mo_trans/cu_mo_trans.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/cu_mo_trans/cu_mo_trans.F90
+damping_driver.o: $(SRCROOT)atmos_param/damping_driver/damping_driver.F90 mg_drag.o cg_drag.o topo_drag.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/damping_driver/damping_driver.F90
+diag_cloud.o: $(SRCROOT)atmos_param/diag_cloud/null/diag_cloud.F90 cloud_zonal.o diag_cloud_rad.o shallow_conv.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/diag_cloud/null/diag_cloud.F90
+diag_cloud_rad.o: $(SRCROOT)atmos_param/diag_cloud_rad/null/diag_cloud_rad.F90 cloud_rad.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/diag_cloud_rad/null/diag_cloud_rad.F90
+diag_clouds_W.o: $(SRCROOT)atmos_param/sea_esf_rad/null/diag_clouds_W.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/diag_clouds_W.F90
+diag_integral.o: $(SRCROOT)atmos_param/diag_integral/diag_integral.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/diag_integral/diag_integral.F90
+diff_center.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_center.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h util.o tridiagonal_gotm.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_center.F90
+diff_face.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_face.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h util.o tridiagonal_gotm.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_face.F90
+diffusivity.o: $(SRCROOT)atmos_param/diffusivity/null/diffusivity.F90 monin_obukhov.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/diffusivity/null/diffusivity.F90
+dissipationeq.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/dissipationeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/dissipationeq.F90
+donner_deep.o: $(SRCROOT)atmos_param/donner_deep/null/donner_deep.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/donner_deep/null/donner_deep.F90
+donner_deep_clouds_W.o: $(SRCROOT)atmos_param/sea_esf_rad/null/donner_deep_clouds_W.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/donner_deep_clouds_W.F90
+dry_adj.o: $(SRCROOT)atmos_param/dry_adj/null/dry_adj.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/dry_adj/null/dry_adj.F90
+dyn_core.o: $(SRCROOT)atmos_fv_dynamics/model/dyn_core.F90 fv_pack.o shr_kind_mod.o pft_module.o sw_core.o timingModule.o mod_comm.o fv_arrays.o pmaxmin.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/dyn_core.F90
+eakf_ada.o: $(SRCROOT)ada/eakf_ada.F90 ada_types.o assim_tools.o loc_and_dist.o cov_cutoff.o rand_no.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ada/eakf_ada.F90
+eakf_mtv_ida_dn1.o: $(SRCROOT)ida/eakf_mtv_ida_dn1.f90 assim_tools.o model_ida_dn1.o obs_eakf_ida_dn.o loc_and_dist.o cov_cutoff.o ida_types.o rand_no.o
+	$(FC) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/eakf_mtv_ida_dn1.f90
+eakf_mtv_ida_up.o: $(SRCROOT)ida/eakf_mtv_ida_up.f90 assim_tools.o model_ida_up.o obs_eakf_ida_up.o loc_and_dist.o cov_cutoff.o ida_types.o ada_types.o rand_no.o
+	$(FC) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/eakf_mtv_ida_up.f90
+eakf_tab.o: $(SRCROOT)ecda/shared/eakf_sup/eakf_tab.F90 cov_cutoff.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/eakf_sup/eakf_tab.F90
+ecmfft.o: $(SRCROOT)atmos_fv_dynamics/model/ecmfft.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/ecmfft.F90
+edt.o: $(SRCROOT)atmos_param/edt/null/edt.F90 monin_obukhov.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/edt/null/edt.F90
+entrain.o: $(SRCROOT)atmos_param/entrain/entrain.F90 monin_obukhov.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/entrain/entrain.F90
+epsbalgebraic.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/epsbalgebraic.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/epsbalgebraic.F90
+eqstate.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/eqstate.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/eqstate.F90
+esfsw_driver.o: $(SRCROOT)atmos_param/sea_esf_rad/esfsw_driver.F90 esfsw_parameters.o rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/esfsw_driver.F90
+esfsw_parameters.o: $(SRCROOT)atmos_param/sea_esf_rad/esfsw_parameters.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/esfsw_parameters.F90
+fill_module.o: $(SRCROOT)atmos_fv_dynamics/model/fill_module.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/fill_module.F90
+fk_craig.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/fk_craig.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/fk_craig.F90
+fs_profile.o: $(SRCROOT)atmos_param/fsrad/null/fs_profile.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/fs_profile.F90
+fsrad.o: $(SRCROOT)atmos_param/fsrad/null/fsrad.F90 mcm_lw.o mcm_sw_driver.o shortwave.o longwave.o rdparm.o rad_diag.o co2_data.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/fsrad.F90
+fv_arrays.o: $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc mod_comm.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/model/fv_arrays.F90
+fv_diagnostics.o: $(SRCROOT)atmos_fv_dynamics/tools/fv_diagnostics.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc fv_pack.o fv_arrays.o pmaxmin.o pv_module.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/tools/fv_diagnostics.F90
+fv_dynamics.o: $(SRCROOT)atmos_fv_dynamics/model/fv_dynamics.F90 fv_pack.o mapz_module.o dyn_core.o pft_module.o timingModule.o mod_comm.o fv_arrays.o shr_kind_mod.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/fv_dynamics.F90
+fv_pack.o: $(SRCROOT)atmos_fv_dynamics/model/fv_pack.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc timingModule.o shr_kind_mod.o mod_comm.o fv_arrays.o pft_module.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/model/fv_pack.F90
+fv_physics.o: $(SRCROOT)atmos_fv_dynamics/driver/coupled/fv_physics.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc physics_driver.o fv_pack.o timingModule.o atmos_co2.o atmos_nudge.o update_fv_phys.o fv_arrays.o ada_types.o heEnKF_ada_driver_fv.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/driver/coupled/fv_physics.F90
+fv_restart.o: $(SRCROOT)atmos_fv_dynamics/tools/fv_restart.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc fv_pack.o mod_comm.o fv_arrays.o pmaxmin.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/tools/fv_restart.F90
+gas_tf.o: $(SRCROOT)atmos_param/sea_esf_rad/gas_tf.F90 rad_utilities.o longwave_params.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/gas_tf.F90
+generic_BLING.o: $(SRCROOT)ocean_shared/generic_tracers/generic_BLING.F90 generic_tracer_utils.o FMS_ocmip2_co2calc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ocean_shared/generic_tracers/generic_BLING.F90
+generic_CFC.o: $(SRCROOT)ocean_shared/generic_tracers/generic_CFC.F90 generic_tracer_utils.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ocean_shared/generic_tracers/generic_CFC.F90
+generic_TOPAZ.o: $(SRCROOT)ocean_shared/generic_tracers/generic_TOPAZ.F90 generic_tracer_utils.o FMS_ocmip2_co2calc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ocean_shared/generic_tracers/generic_TOPAZ.F90
+generic_tracer.o: $(SRCROOT)ocean_shared/generic_tracers/generic_tracer.F90 generic_tracer_utils.o generic_CFC.o generic_TOPAZ.o generic_BLING.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ocean_shared/generic_tracers/generic_tracer.F90
+generic_tracer_utils.o: $(SRCROOT)ocean_shared/generic_tracers/generic_tracer_utils.F90 $(SRCROOT)shared/include/fms_platform.h FMS_coupler_util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)ocean_shared/generic_tracers/generic_tracer_utils.F90
+genericeq.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/genericeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/genericeq.F90
+getmax.o: $(SRCROOT)atmos_fv_dynamics/tools/getmax.F90 mod_comm.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/getmax.F90
+gmean.o: $(SRCROOT)atmos_fv_dynamics/tools/gmean.F90 fv_pack.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/gmean.F90
+gotm_lib_version.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/gotm_lib_version.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/gotm_lib_version.F90
+grey_radiation.o: $(SRCROOT)atmos_param/grey_radiation/grey_radiation.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/grey_radiation/grey_radiation.F90
+gridinterpol.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/gridinterpol.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/gridinterpol.F90
+hconst.o: $(SRCROOT)atmos_param/fsrad/null/hconst.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/hconst.F90
+heEnKF_ada_driver_fv.o: $(SRCROOT)ada/heEnKF_ada_driver_fv.F90 ada_types.o ada_core.o bgrid_horiz.o bgrid_vert.o eakf_ada.o ida_types.o ida_core.o eakf_mtv_ida_up.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ada/heEnKF_ada_driver_fv.F90
+heEnKF_hea_eakf_oda.o: $(SRCROOT)oda/heEnKF_hea_eakf_oda.F90 heEnKF_model_oda.o obs_eakf_ocn.o assim_tools.o loc_and_dist.o cov_cutoff.o rand_no.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)oda/heEnKF_hea_eakf_oda.F90
+heEnKF_model_oda.o: $(SRCROOT)oda/model/heEnKF_model_oda.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)oda/model/heEnKF_model_oda.F90
+heEnKF_oda_driver_ecda.o: $(SRCROOT)oda/heEnKF_oda_driver_ecda.F90 $(SRCROOT)shared/include/fms_platform.h heEnKF_hea_eakf_oda.o ocean_types.o ocean_grids.o ocean_topog.o ocean_convect.o ocean_domains.o eakf_mtv_ida_dn1.o ida_types.o ida_core.o ice_type.o ice_grid.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)oda/heEnKF_oda_driver_ecda.F90
+ice_albedo.o: $(SRCROOT)ice_param/ice_albedo.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_param/ice_albedo.F90
+ice_bergs.o: $(SRCROOT)ice_sis/ice_bergs.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/ice_bergs.F90
+ice_dyn.o: $(SRCROOT)ice_sis/ice_dyn.F90 ice_grid.o ice_thm.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/ice_dyn.F90
+ice_grid.o: $(SRCROOT)ice_sis/ice_grid.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/ice_grid.F90
+ice_model.o: $(SRCROOT)ice_sis/ice_model.F90 ocean_albedo.o ocean_rough.o ice_type.o ice_grid.o ice_spec.o ice_thm.o ice_dyn.o ice_bergs.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/ice_model.F90
+ice_spec.o: $(SRCROOT)ice_sis/ice_spec.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/ice_spec.F90
+ice_thm.o: $(SRCROOT)ice_sis/ice_thm.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/ice_thm.F90
+ice_type.o: $(SRCROOT)ice_sis/ice_type.F90 ice_grid.o ice_thm.o ice_dyn.o ice_bergs.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/ice_type.F90
+ida_core.o: $(SRCROOT)ida/ida_core.F90 ida_types.o ada_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/ida_core.F90
+ida_driver.o: $(SRCROOT)ida/ida_driver.F90 ida_types.o ida_core.o ice_type.o ice_grid.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/ida_driver.F90
+ida_types.o: $(SRCROOT)ida/ida_types.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/ida_types.F90
+init_dry_atm.o: $(SRCROOT)atmos_fv_dynamics/tools/init_dry_atm.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc fv_pack.o mod_comm.o fv_arrays.o pmaxmin.o shr_kind_mod.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/tools/init_dry_atm.F90
+init_sw_ic.o: $(SRCROOT)atmos_fv_dynamics/tools/init_sw_ic.F90 fv_pack.o pv_module.o mod_comm.o shr_kind_mod.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/init_sw_ic.F90
+internal_wave.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/internal_wave.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/internal_wave.F90
+interpolator.o: $(SRCROOT)atmos_shared/interpolator/interpolator.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/interpolator/interpolator.F90
+isccp_clouds.o: $(SRCROOT)atmos_param/sea_esf_rad/isccp_clouds.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/isccp_clouds.F90
+ispralength.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/ispralength.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/ispralength.F90
+kbalgebraic.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbalgebraic.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbalgebraic.F90
+kbeq.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbeq.F90
+kpp.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kpp.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o eqstate.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kpp.F90
+lagrange.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/lagrange.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/lagrange.F90
+lengthscaleeq.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/lengthscaleeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/lengthscaleeq.F90
+lhsw_driver.o: $(SRCROOT)atmos_param/sea_esf_rad/null/lhsw_driver.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/lhsw_driver.F90
+lin_cloud_microphys.o: $(SRCROOT)atmos_param/lin_cloud_microphys/lin_cloud_microphys.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/lin_cloud_microphys/lin_cloud_microphys.F90
+loc_and_dist.o: $(SRCROOT)ecda/shared/eakf_sup/loc_and_dist.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/eakf_sup/loc_and_dist.F90
+longwave.o: $(SRCROOT)atmos_param/fsrad/null/longwave.F90 rdparm.o hconst.o co2_data.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/longwave.F90
+longwave_clouds.o: $(SRCROOT)atmos_param/sea_esf_rad/longwave_clouds.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/longwave_clouds.F90
+longwave_driver.o: $(SRCROOT)atmos_param/sea_esf_rad/longwave_driver.F90 rad_utilities.o sealw99.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/longwave_driver.F90
+longwave_fluxes.o: $(SRCROOT)atmos_param/sea_esf_rad/longwave_fluxes.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/longwave_fluxes.F90
+longwave_params.o: $(SRCROOT)atmos_param/sea_esf_rad/longwave_params.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/longwave_params.F90
+longwave_tables.o: $(SRCROOT)atmos_param/sea_esf_rad/longwave_tables.F90 rad_utilities.o longwave_params.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/longwave_tables.F90
+lscale_cond.o: $(SRCROOT)atmos_param/lscale_cond/null/lscale_cond.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/lscale_cond/null/lscale_cond.F90
+lw_gases_stdtf.o: $(SRCROOT)atmos_param/sea_esf_rad/lw_gases_stdtf.F90 rad_utilities.o gas_tf.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/lw_gases_stdtf.F90
+m_tracname.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/m_tracname.F90 moz.mods.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/m_tracname.F90
+mapz_module.o: $(SRCROOT)atmos_fv_dynamics/model/mapz_module.F90 fv_pack.o fill_module.o fv_diagnostics.o mod_comm.o fv_arrays.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/mapz_module.F90
+mask.o: $(SRCROOT)ice_sis/mask.F90 rot.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/mask.F90
+mcm_lw.o: $(SRCROOT)atmos_param/fsrad/null/mcm_lw.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/mcm_lw.F90
+mcm_sw_driver.o: $(SRCROOT)atmos_param/fsrad/null/mcm_sw_driver.F90 mcm_swnew.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/mcm_sw_driver.F90
+mcm_swnew.o: $(SRCROOT)atmos_param/fsrad/null/mcm_swnew.F90 mcm_swtbls.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/mcm_swnew.F90
+mcm_swtbls.o: $(SRCROOT)atmos_param/fsrad/null/mcm_swtbls.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/mcm_swtbls.F90
+mg_drag.o: $(SRCROOT)atmos_param/mg_drag/mg_drag.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/mg_drag/mg_drag.F90
+mgrp_prscr_clds.o: $(SRCROOT)atmos_param/sea_esf_rad/null/mgrp_prscr_clds.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/mgrp_prscr_clds.F90
+microphys_cloud.o: $(SRCROOT)atmos_param/sea_esf_rad/microphys_cloud.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/microphys_cloud.F90
+microphys_rad.o: $(SRCROOT)atmos_param/sea_esf_rad/microphys_rad.F90 cloud_generator.o rad_utilities.o longwave_params.o esfsw_parameters.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/microphys_rad.F90
+mo_chem_utls.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chem_utls.F90 moz.mods.o m_tracname.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chem_utls.F90
+mo_chemdr.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemdr.F90 moz.mods.o mo_photo.o mo_exp_slv.o mo_imp_slv.o mo_rodas_slv.o mo_usrrxt.o mo_setinv.o moz.subs.o mo_setsox.o mo_chem_utls.o strat_chem_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemdr.F90
+mo_chemini.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemini.F90 mo_photo.o mo_chem_utls.o mo_usrrxt.o moz.mods.o mo_exp_slv.o mo_imp_slv.o mo_rodas_slv.o mo_read_sim_chm.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemini.F90
+mo_exp_slv.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_exp_slv.F90 moz.mods.o mo_chem_utls.o moz.mat.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_exp_slv.F90
+mo_hook.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_hook.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_hook.F90
+mo_imp_slv.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_imp_slv.F90 moz.mods.o mo_chem_utls.o m_tracname.o moz.mat.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_imp_slv.F90
+mo_jpl.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_jpl.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_jpl.F90
+mo_photo.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_photo.F90 mo_chem_utls.o moz.mods.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_photo.F90
+mo_read_sim_chm.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_read_sim_chm.F90 moz.mods.o m_tracname.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_read_sim_chm.F90
+mo_rodas_slv.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_rodas_slv.F90 moz.mods.o mo_chem_utls.o moz.mat.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_rodas_slv.F90
+mo_setinv.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setinv.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setinv.F90
+mo_setsox.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setsox.F90 mo_chem_utls.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setsox.F90
+mo_usrrxt.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_usrrxt.F90 strat_chem_utilities.o mo_chem_utls.o moz.mods.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_usrrxt.F90
+mod_comm.o: $(SRCROOT)atmos_fv_dynamics/tools/mod_comm.F90 timingModule.o shr_kind_mod.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/mod_comm.F90
+model_ada.o: $(SRCROOT)ada/model/model_ada.F90 ada_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ada/model/model_ada.F90
+model_ida_dn1.o: $(SRCROOT)ida/model/model_ida_dn1.f90 ida_types.o
+	$(FC) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/model/model_ida_dn1.f90
+model_ida_up.o: $(SRCROOT)ida/model/model_ida_up.f90 ada_types.o
+	$(FC) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/model/model_ida_up.f90
+moist_conv.o: $(SRCROOT)atmos_param/moist_conv/null/moist_conv.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/moist_conv/null/moist_conv.F90
+moist_processes.o: $(SRCROOT)atmos_param/moist_processes/moist_processes.F90 betts_miller.o bm_massflux.o bm_omp.o donner_deep.o moist_conv.o lscale_cond.o uw_conv.o lin_cloud_microphys.o ras.o dry_adj.o strat_cloud.o rh_clouds.o diag_cloud.o diag_integral.o cu_mo_trans.o mo_hook.o rad_utilities.o moist_processes_utils.o moistproc_kernels.o atmos_tracer_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/moist_processes/moist_processes.F90
+moist_processes_utils.o: $(SRCROOT)atmos_param/moist_processes/moist_processes_utils.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/moist_processes/moist_processes_utils.F90
+moistproc_kernels.o: $(SRCROOT)atmos_param/moist_processes/moistproc_kernels.F90 betts_miller.o bm_massflux.o bm_omp.o diag_cloud.o donner_deep.o moist_conv.o lscale_cond.o uw_conv.o lin_cloud_microphys.o ras.o strat_cloud.o rh_clouds.o cu_mo_trans.o atmos_tracer_utilities.o mo_hook.o rad_utilities.o moist_processes_utils.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/moist_processes/moistproc_kernels.F90
+monin_obukhov.o: $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/monin_obukhov/monin_obukhov.F90
+monin_obukhov_kernel.o: $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_kernel.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_interfaces.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include -I$(SRCROOT)atmos_param/monin_obukhov	$(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_kernel.F90
+moz.mat.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mat.F90 moz.mods.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mat.F90
+moz.mods.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mods.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mods.F90
+moz.subs.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.subs.F90 moz.mods.o mo_jpl.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.subs.F90
+my25_turb.o: $(SRCROOT)atmos_param/my25_turb/null/my25_turb.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/my25_turb/null/my25_turb.F90
+obs_eakf_atm.o: $(SRCROOT)ada/obs/obs_eakf_atm.F90 ada_types.o obs_tools.o loc_and_dist.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ada/obs/obs_eakf_atm.F90
+obs_eakf_ida_dn.o: $(SRCROOT)ida/obs/obs_eakf_ida_dn.F90 obs_tools.o loc_and_dist.o ida_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/obs/obs_eakf_ida_dn.F90
+obs_eakf_ida_up.o: $(SRCROOT)ida/obs/obs_eakf_ida_up.F90 obs_tools.o loc_and_dist.o ida_types.o ada_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ida/obs/obs_eakf_ida_up.F90
+obs_eakf_ocn.o: $(SRCROOT)oda/obs/obs_eakf_ocn.F90 obs_tools.o loc_and_dist.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)oda/obs/obs_eakf_ocn.F90
+obs_tools.o: $(SRCROOT)ecda/shared/eakf_sup/obs_tools.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/eakf_sup/obs_tools.F90
+ocean_adv_vel_diag.o: $(SRCROOT)mom4p1/ocean_diag/ocean_adv_vel_diag.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_diag/ocean_adv_vel_diag.F90
+ocean_advection_velocity.o: $(SRCROOT)mom4p1/ocean_core/ocean_advection_velocity.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_workspace.o ocean_obc.o ocean_util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_advection_velocity.F90
+ocean_age_tracer.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_age_tracer.F90 ocean_tpm_util.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_tracers/ocean_age_tracer.F90
+ocean_albedo.o: $(SRCROOT)ice_param/ocean_albedo.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_param/ocean_albedo.F90
+ocean_barotropic.o: $(SRCROOT)mom4p1/ocean_core/ocean_barotropic.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_bih_friction.o ocean_domains.o ocean_lap_friction.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_barotropic.F90
+ocean_bbc.o: $(SRCROOT)mom4p1/ocean_core/ocean_bbc.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_bbc.F90
+ocean_bgc_restore.o: $(SRCROOT)mom4p1/ocean_bgc/ocean_bgc_restore.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o ocmip2_co2calc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocean_bgc_restore.F90
+ocean_bih_friction.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_friction.F90 ocean_bihcst_friction.o ocean_bihgen_friction.o ocean_domains.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_friction.F90
+ocean_bih_tracer.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_tracer.F90 ocean_domains.o ocean_operators.o ocean_obc.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_tracer.F90
+ocean_bihcst_friction.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihcst_friction.F90 ocean_domains.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihcst_friction.F90
+ocean_bihgen_friction.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihgen_friction.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihgen_friction.F90
+ocean_convect.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_convect.F90 ocean_density.o ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_convect.F90
+ocean_coriolis.o: $(SRCROOT)mom4p1/ocean_core/ocean_coriolis.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_coriolis.F90
+ocean_density.o: $(SRCROOT)mom4p1/ocean_core/ocean_density.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_pressure.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_density.F90
+ocean_diagnostics.o: $(SRCROOT)mom4p1/ocean_diag/ocean_diagnostics.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_adv_vel_diag.o ocean_domains.o ocean_tracer_diag.o ocean_types.o ocean_velocity_diag.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_diag/ocean_diagnostics.F90
+ocean_domains.o: $(SRCROOT)mom4p1/ocean_core/ocean_domains.F90 ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_core/ocean_domains.F90
+ocean_drifters.o: $(SRCROOT)mom4p1/ocean_diag/ocean_drifters.F90 ocean_domains.o ocean_parameters.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_diag/ocean_drifters.F90
+ocean_form_drag.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_form_drag.F90 ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_form_drag.F90
+ocean_frazil.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_frazil.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_tpm_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_tracers/ocean_frazil.F90
+ocean_generic_tracer.o: $(SRCROOT)mom4p1/ocean_bgc/ocean_generic_tracer.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o ocean_parameters.o generic_tracer.o generic_tracer_utils.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocean_generic_tracer.F90
+ocean_grids.o: $(SRCROOT)mom4p1/ocean_core/ocean_grids.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_grids.F90
+ocean_ibgc.o: $(SRCROOT)mom4p1/ocean_bgc/ocean_ibgc.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o ocmip2_co2calc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocean_ibgc.F90
+ocean_increment_eta.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_eta.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_eta.F90
+ocean_increment_tracer.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_tracer.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_tracer.F90
+ocean_increment_velocity.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_velocity.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_velocity.F90
+ocean_lap_friction.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_friction.F90 ocean_domains.o ocean_lapcst_friction.o ocean_lapgen_friction.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_friction.F90
+ocean_lap_tracer.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_tracer.F90 ocean_domains.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_tracer.F90
+ocean_lapcst_friction.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapcst_friction.F90 ocean_domains.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapcst_friction.F90
+ocean_lapgen_friction.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapgen_friction.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapgen_friction.F90
+ocean_mixdownslope.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_mixdownslope.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_density.o ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_mixdownslope.F90
+ocean_model.o: $(SRCROOT)mom4p1/ocean_core/ocean_model.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_advection_velocity.o ocean_barotropic.o ocean_bbc.o ocean_bih_friction.o ocean_convect.o ocean_coriolis.o ocean_density.o ocean_diagnostics.o ocean_domains.o ocean_form_drag.o ocean_grids.o ocean_increment_eta.o ocean_increment_tracer.o ocean_increment_velocity.o ocean_lap_tracer.o ocean_bih_tracer.o ocean_lap_friction.o ocean_mixdownslope.o ocean_momentum_source.o ocean_nphysics.o ocean_obc.o ocean_operators.o ocean_overexchange.o ocean_overflow.o ocean_passive.o ocean_polar_filter.o ocean_pressure.o ocean_rivermix.o ocean_riverspread.o ocean_parameters.o ocean_sbc.o ocean_shortwave.o ocean_sigma_transport.o ocean_sponges_eta.o ocean_sponges_tracer.o ocean_sponges_velocity.o ocean_submesoscale.o ocean_tempsalt.o ocean_thickness.o ocean_time_filter.o ocean_topog.o ocean_tracer_advect.o ocean_tracer.o ocean_tracer_util.o ocean_tpm.o ocean_types.o ocean_util.o ocean_velocity_advect.o ocean_velocity_diag.o ocean_velocity.o ocean_vert_mix.o ocean_vert_gotm.o ocean_workspace.o ocean_xlandinsert.o ocean_xlandmix.o ocean_drifters.o ada_types.o heEnKF_oda_driver_ecda.o oda_driver.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_model.F90
+ocean_momentum_source.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_momentum_source.F90 ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/sources/ocean_momentum_source.F90
+ocean_nphysics.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_nphysics_util.o ocean_nphysicsA.o ocean_nphysicsB.o ocean_nphysicsC.o ocean_parameters.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics.F90
+ocean_nphysicsA.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsA.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_nphysics_util.o ocean_operators.o ocean_parameters.o ocean_sigma_transport.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsA.F90
+ocean_nphysicsB.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsB.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_nphysics_util.o ocean_operators.o ocean_parameters.o ocean_sigma_transport.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsB.F90
+ocean_nphysicsC.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsC.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_nphysics_util.o ocean_operators.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsC.F90
+ocean_nphysics_util.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics_util.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_density.o ocean_operators.o ocean_parameters.o ocean_tracer_diag.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics_util.F90
+ocean_obc.o: $(SRCROOT)mom4p1/ocean_core/ocean_obc.F90 $(SRCROOT)shared/include/fms_platform.h ocean_util.o ocean_domains.o ocean_parameters.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_core/ocean_obc.F90
+ocean_operators.o: $(SRCROOT)mom4p1/ocean_core/ocean_operators.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_operators.F90
+ocean_overexchange.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_overexchange.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_density.o ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_overexchange.F90
+ocean_overflow.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_overflow.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_density.o ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_overflow.F90
+ocean_parameters.o: $(SRCROOT)mom4p1/ocean_core/ocean_parameters.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_core/ocean_parameters.F90
+ocean_passive.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_passive.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_tpm_util.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_tracers/ocean_passive.F90
+ocean_pert_co2.o: $(SRCROOT)mom4p1/ocean_bgc/ocean_pert_co2.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o ocmip2_co2calc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocean_pert_co2.F90
+ocean_po4_pre.o: $(SRCROOT)mom4p1/ocean_bgc/ocean_po4_pre.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o ocean_tracer_diag.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocean_po4_pre.F90
+ocean_polar_filter.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_polar_filter.F90 ocean_domains.o ocean_parameters.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/sources/ocean_polar_filter.F90
+ocean_pressure.o: $(SRCROOT)mom4p1/ocean_core/ocean_pressure.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o ocean_obc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_pressure.F90
+ocean_residency.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency.F90 ocean_tpm_util.o ocean_types.o ocean_residency_meta.o ocean_residency_ml.o ocean_residency_range.o ocean_residency_integrand.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_tracers/ocean_residency.F90
+ocean_residency_integrand.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_integrand.F90 ocean_residency_meta.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_tracers/ocean_residency_integrand.F90
+ocean_residency_meta.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_meta.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_tracers/ocean_residency_meta.F90
+ocean_residency_ml.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_ml.F90 ocean_residency_meta.o ocean_types.o ocean_tracer_diag.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_tracers/ocean_residency_ml.F90
+ocean_residency_range.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_range.F90 $(SRCROOT)shared/include/fms_platform.h ocean_residency_meta.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_tracers/ocean_residency_range.F90
+ocean_rivermix.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_rivermix.F90 ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/sources/ocean_rivermix.F90
+ocean_riverspread.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_riverspread.F90 ocean_domains.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/sources/ocean_riverspread.F90
+ocean_rough.o: $(SRCROOT)ice_param/ocean_rough.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_param/ocean_rough.F90
+ocean_sbc.o: $(SRCROOT)mom4p1/ocean_core/ocean_sbc.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_riverspread.o ocean_tpm.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_sbc.F90
+ocean_shortwave.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_shortwave_csiro.o ocean_shortwave_jerlov.o ocean_shortwave_gfdl.o ocean_tracer_util.o ocean_types.o ocean_tpm_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave.F90
+ocean_shortwave_csiro.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_csiro.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_csiro.F90
+ocean_shortwave_gfdl.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_gfdl.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_gfdl.F90
+ocean_shortwave_jerlov.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_jerlov.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_jerlov.F90
+ocean_sigma_transport.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_sigma_transport.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_density.o ocean_operators.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_sigma_transport.F90
+ocean_sponges_eta.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_eta.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_eta.F90
+ocean_sponges_tracer.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_tracer.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_tracer.F90
+ocean_sponges_velocity.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_velocity.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_velocity.F90
+ocean_submesoscale.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_submesoscale.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_operators.o ocean_parameters.o ocean_tracer_diag.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_submesoscale.F90
+ocean_tempsalt.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_tempsalt.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_tpm_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_tracers/ocean_tempsalt.F90
+ocean_thickness.o: $(SRCROOT)mom4p1/ocean_core/ocean_thickness.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_grids.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_thickness.F90
+ocean_time_filter.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_time_filter.F90 ocean_domains.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_velocity_diag.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/sources/ocean_time_filter.F90
+ocean_topog.o: $(SRCROOT)mom4p1/ocean_core/ocean_topog.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_topog.F90
+ocean_tpm.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm.F90 ocean_types.o ocean_age_tracer.o ocean_residency.o ocean_pert_co2.o ocmip2_abiotic.o ocmip2_cfc.o ocmip2_biotic.o ocean_bgc_restore.o ocmip2_he.o ocean_po4_pre.o ocean_ibgc.o ocean_generic_tracer.o ocean_frazil.o ocean_tempsalt.o ocean_passive.o transport_matrix.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_tracers/ocean_tpm.F90
+ocean_tpm_util.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm_util.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_tracers/ocean_tpm_util.F90
+ocean_tracer.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h transport_matrix.o ocean_convect.o ocean_domains.o ocean_frazil.o ocean_bih_tracer.o ocean_generic_tracer.o ocean_lap_tracer.o ocean_obc.o ocean_parameters.o ocean_passive.o ocean_polar_filter.o ocean_shortwave.o ocean_tempsalt.o ocean_tpm.o ocean_tpm_util.o ocean_tracer_advect.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_vert_mix.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_tracers/ocean_tracer.F90
+ocean_tracer_advect.o: $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer_advect.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_obc.o ocean_parameters.o ocean_topog.o ocean_tracer_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_tracers/ocean_tracer_advect.F90
+ocean_tracer_diag.o: $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_diag.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_density.o ocean_domains.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_diag/ocean_tracer_diag.F90
+ocean_tracer_util.o: $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_util.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_diag/ocean_tracer_util.F90
+ocean_types.o: $(SRCROOT)mom4p1/ocean_core/ocean_types.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)mom4p1/ocean_core/ocean_memory.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_types.F90
+ocean_util.o: $(SRCROOT)mom4p1/ocean_core/ocean_util.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_util.F90
+ocean_velocity.o: $(SRCROOT)mom4p1/ocean_core/ocean_velocity.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_bih_friction.o ocean_coriolis.o ocean_domains.o ocean_form_drag.o ocean_lap_friction.o ocean_momentum_source.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_pressure.o ocean_types.o ocean_util.o ocean_velocity_advect.o ocean_velocity_diag.o ocean_vert_mix.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_velocity.F90
+ocean_velocity_advect.o: $(SRCROOT)mom4p1/ocean_core/ocean_velocity_advect.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_obc.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_workspace.o ocean_util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_velocity_advect.F90
+ocean_velocity_diag.o: $(SRCROOT)mom4p1/ocean_diag/ocean_velocity_diag.F90 $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_bih_friction.o ocean_coriolis.o ocean_domains.o ocean_form_drag.o ocean_lap_friction.o ocean_momentum_source.o ocean_operators.o ocean_parameters.o ocean_pressure.o ocean_types.o ocean_util.o ocean_velocity_advect.o ocean_vert_mix.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_diag/ocean_velocity_diag.F90
+ocean_vert_chen.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_chen.F90 ocean_density.o ocean_domains.o ocean_parameters.o ocean_shortwave_csiro.o ocean_types.o ocean_util.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_chen.F90
+ocean_vert_const.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_const.F90 ocean_density.o ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_const.F90
+ocean_vert_gotm.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_gotm.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h tridiagonal_gotm.o turbulence.o ocean_domains.o ocean_parameters.o ocean_types.o ocean_util.o ocean_workspace.o ocean_obc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_gotm.F90
+ocean_vert_kpp.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_density.o ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp.F90
+ocean_vert_kpp_mom4p0.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp_mom4p0.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_density.o ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp_mom4p0.F90
+ocean_vert_mix.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_mix.F90 ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_util.o ocean_vert_const.o ocean_vert_chen.o ocean_vert_gotm.o ocean_vert_kpp.o ocean_vert_kpp_mom4p0.o ocean_vert_pp.o ocean_vert_tidal.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_mix.F90
+ocean_vert_pp.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_pp.F90 ocean_density.o ocean_domains.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_pp.F90
+ocean_vert_tidal.o: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_tidal.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_domains.o ocean_operators.o ocean_parameters.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_tidal.F90
+ocean_workspace.o: $(SRCROOT)mom4p1/ocean_core/ocean_workspace.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_core	$(SRCROOT)mom4p1/ocean_core/ocean_workspace.F90
+ocean_xlandinsert.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandinsert.F90 ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandinsert.F90
+ocean_xlandmix.o: $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandmix.F90 ocean_domains.o ocean_parameters.o ocean_tracer_util.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandmix.F90
+ocmip2_abiotic.o: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_abiotic.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o ocmip2_co2calc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocmip2_abiotic.F90
+ocmip2_biotic.o: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_biotic.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o ocmip2_co2calc.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocmip2_biotic.F90
+ocmip2_cfc.o: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_cfc.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocmip2_cfc.F90
+ocmip2_co2calc.o: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_co2calc.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_bgc/ocmip2_co2calc.F90
+ocmip2_he.o: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_he.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_bgc/ocmip2_he.F90
+oda_driver.o: $(SRCROOT)mom4p1/ocean_core/oda_driver.F90 ocean_convect.o ocean_domains.o ocean_grids.o ocean_parameters.o ocean_topog.o ocean_types.o ocean_workspace.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)mom4p1/ocean_core/oda_driver.F90
+ode_solvers.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/ode_solvers.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/ode_solvers.F90
+optical_path.o: $(SRCROOT)atmos_param/sea_esf_rad/optical_path.F90 rad_utilities.o longwave_params.o lw_gases_stdtf.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/optical_path.F90
+original_fms_rad.o: $(SRCROOT)atmos_param/sea_esf_rad/null/original_fms_rad.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/original_fms_rad.F90
+ozone.o: $(SRCROOT)atmos_param/sea_esf_rad/ozone.F90 interpolator.o rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/ozone.F90
+par_vecsum.o: $(SRCROOT)atmos_fv_dynamics/tools/par_vecsum.F90 mod_comm.o fv_arrays.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/par_vecsum.F90
+pft_module.o: $(SRCROOT)atmos_fv_dynamics/model/pft_module.F90 ecmfft.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/pft_module.F90
+physics_driver.o: $(SRCROOT)atmos_param/physics_driver/physics_driver.F90 atmos_tracer_driver.o rad_utilities.o cosp_driver.o moist_processes.o moistproc_kernels.o vert_turb_driver.o vert_diff_driver.o radiation_driver.o cloud_spec.o aerosol.o radiative_gases.o damping_driver.o grey_radiation.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/physics_driver/physics_driver.F90
+pmaxmin.o: $(SRCROOT)atmos_fv_dynamics/tools/pmaxmin.F90 mod_comm.o fv_arrays.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/pmaxmin.F90
+potentialml.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/potentialml.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/potentialml.F90
+production.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/production.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/production.F90
+pv_module.o: $(SRCROOT)atmos_fv_dynamics/tools/pv_module.F90 fv_pack.o mod_comm.o fv_arrays.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/pv_module.F90
+q2over2eq.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/q2over2eq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/q2over2eq.F90
+r_ratio.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/r_ratio.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/r_ratio.F90
+rad_diag.o: $(SRCROOT)atmos_param/fsrad/null/rad_diag.F90 rdparm.o hconst.o longwave.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/rad_diag.F90
+rad_output_file.o: $(SRCROOT)atmos_param/sea_esf_rad/rad_output_file.F90 rad_utilities.o esfsw_parameters.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/rad_output_file.F90
+rad_utilities.o: $(SRCROOT)atmos_param/sea_esf_rad/rad_utilities.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/rad_utilities.F90
+radiation_diag.o: $(SRCROOT)atmos_param/sea_esf_rad/radiation_diag.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/radiation_diag.F90
+radiation_driver.o: $(SRCROOT)atmos_param/radiation_driver/radiation_driver.F90 rad_utilities.o esfsw_parameters.o diag_integral.o original_fms_rad.o sea_esf_rad.o rad_output_file.o cloudrad_package.o cloudrad_diagnostics.o microphys_rad.o aerosolrad_package.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/radiation_driver/radiation_driver.F90
+radiative_gases.o: $(SRCROOT)atmos_param/sea_esf_rad/radiative_gases.F90 rad_utilities.o ozone.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/radiative_gases.F90
+rand_no.o: $(SRCROOT)ecda/shared/eakf_sup/rand_no.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ecda/shared/eakf_sup/rand_no.F90
+ras.o: $(SRCROOT)atmos_param/ras/ras.F90 rad_utilities.o aer_ccn_act.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/ras/ras.F90
+rdparm.o: $(SRCROOT)atmos_param/fsrad/null/rdparm.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/rdparm.F90
+rh_based_clouds.o: $(SRCROOT)atmos_param/sea_esf_rad/null/rh_based_clouds.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/rh_based_clouds.F90
+rh_clouds.o: $(SRCROOT)atmos_param/rh_clouds/null/rh_clouds.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/rh_clouds/null/rh_clouds.F90
+rot.o: $(SRCROOT)ice_sis/rot.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)ice_sis/rot.F90
+sea_esf_rad.o: $(SRCROOT)atmos_param/sea_esf_rad/sea_esf_rad.F90 rad_utilities.o radiation_diag.o longwave_driver.o shortwave_driver.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/sea_esf_rad.F90
+sealw99.o: $(SRCROOT)atmos_param/sea_esf_rad/sealw99.F90 rad_utilities.o longwave_params.o longwave_clouds.o longwave_fluxes.o longwave_tables.o optical_path.o gas_tf.o lw_gases_stdtf.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/sealw99.F90
+set_eta.o: $(SRCROOT)atmos_fv_dynamics/tools/set_eta.F90 fv_pack.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/set_eta.F90
+shallow_conv.o: $(SRCROOT)atmos_param/shallow_conv/null/shallow_conv.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/shallow_conv/null/shallow_conv.F90
+shortwave.o: $(SRCROOT)atmos_param/fsrad/null/shortwave.F90 rdparm.o hconst.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/fsrad/null/shortwave.F90
+shortwave_driver.o: $(SRCROOT)atmos_param/sea_esf_rad/shortwave_driver.F90 rad_utilities.o esfsw_parameters.o lhsw_driver.o esfsw_driver.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/shortwave_driver.F90
+shr_kind_mod.o: $(SRCROOT)atmos_fv_dynamics/model/shr_kind_mod.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/shr_kind_mod.F90
+specified_clouds_W.o: $(SRCROOT)atmos_param/sea_esf_rad/null/specified_clouds_W.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/specified_clouds_W.F90
+stable_bl_turb.o: $(SRCROOT)atmos_param/stable_bl_turb/stable_bl_turb.F90 monin_obukhov.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/stable_bl_turb/stable_bl_turb.F90
+standalone_clouds.o: $(SRCROOT)atmos_param/sea_esf_rad/null/standalone_clouds.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/standalone_clouds.F90
+strat_chem_driver.o: $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_driver.F90 strat_chem_model.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_driver.F90
+strat_chem_model.o: $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_model.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_model.F90
+strat_chem_utilities.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/strat_chem_utilities.F90 interpolator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/strat_chem_utilities.F90
+strat_cloud.o: $(SRCROOT)atmos_param/strat_cloud/strat_cloud.F90 cloud_rad.o cloud_generator.o betaDistribution.o rad_utilities.o aer_ccn_act.o aer_in_act.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/strat_cloud/strat_cloud.F90
+strat_clouds_W.o: $(SRCROOT)atmos_param/sea_esf_rad/strat_clouds_W.F90 rad_utilities.o esfsw_parameters.o cloud_rad.o cloud_generator.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/strat_clouds_W.F90
+sw_core.o: $(SRCROOT)atmos_fv_dynamics/model/sw_core.F90 tp_core.o shr_kind_mod.o pft_module.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/sw_core.F90
+time.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/time.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/time.F90
+timingModule.o: $(SRCROOT)atmos_fv_dynamics/tools/timingModule.F90 shr_kind_mod.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/timingModule.F90
+tkealgebraic.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkealgebraic.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkealgebraic.F90
+tkeeq.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkeeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o util.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkeeq.F90
+topo_drag.o: $(SRCROOT)atmos_param/topo_drag/null/topo_drag.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/topo_drag/null/topo_drag.F90
+tp_core.o: $(SRCROOT)atmos_fv_dynamics/model/tp_core.F90 shr_kind_mod.o fill_module.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/tp_core.F90
+tracer_2d.o: $(SRCROOT)atmos_fv_dynamics/model/tracer_2d.F90 fv_pack.o tp_core.o fv_diagnostics.o shr_kind_mod.o fill_module.o mod_comm.o fv_arrays.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/model/tracer_2d.F90
+transport_matrix.o: $(SRCROOT)mom4p1/ocean_tracers/transport_matrix.F90 $(SRCROOT)shared/include/fms_platform.h ocean_tpm_util.o ocean_types.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)shared/include	$(SRCROOT)mom4p1/ocean_tracers/transport_matrix.F90
+tridiagonal_gotm.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/tridiagonal_gotm.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/tridiagonal_gotm.F90
+tropchem_driver.o: $(SRCROOT)atmos_shared/tracer_driver/tropchem/tropchem_driver.F90 atmos_tracer_utilities.o interpolator.o mo_chemdr.o mo_chemini.o m_tracname.o moz.mods.o mo_hook.o strat_chem_utilities.o mo_chem_utls.o atmos_sulfate.o esfsw_parameters.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/tracer_driver/tropchem/tropchem_driver.F90
+turbulence.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/turbulence.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/turbulence.F90
+update_fv_phys.o: $(SRCROOT)atmos_fv_dynamics/model/update_fv_phys.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc fv_pack.o pft_module.o atmos_nudge.o mod_comm.o fv_arrays.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)atmos_fv_dynamics/model	$(SRCROOT)atmos_fv_dynamics/model/update_fv_phys.F90
+upper.o: $(SRCROOT)atmos_fv_dynamics/tools/upper.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_fv_dynamics/tools/upper.F90
+util.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/util.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/util.F90
+uw_clouds_W.o: $(SRCROOT)atmos_param/sea_esf_rad/null/uw_clouds_W.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/null/uw_clouds_W.F90
+uw_conv.o: $(SRCROOT)atmos_param/shallow_cu/null/uw_conv.F90 rad_utilities.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/shallow_cu/null/uw_conv.F90
+variances.o: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/variances.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h turbulence.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)mom4p1/ocean_param/gotm-4.0/include	$(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/variances.F90
+vert_advection.o: $(SRCROOT)atmos_shared/vert_advection/vert_advection.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_shared/vert_advection/vert_advection.F90
+vert_diff.o: $(SRCROOT)atmos_param/vert_diff/vert_diff.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/vert_diff/vert_diff.F90
+vert_diff_driver.o: $(SRCROOT)atmos_param/vert_diff_driver/vert_diff_driver.F90 vert_diff.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/vert_diff_driver/vert_diff_driver.F90
+vert_turb_driver.o: $(SRCROOT)atmos_param/vert_turb_driver/vert_turb_driver.F90 my25_turb.o diffusivity.o edt.o strat_cloud.o shallow_conv.o stable_bl_turb.o entrain.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/vert_turb_driver/vert_turb_driver.F90
+zetac_clouds_W.o: $(SRCROOT)atmos_param/sea_esf_rad/zetac_clouds_W.F90 rad_utilities.o microphys_cloud.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)atmos_param/sea_esf_rad/zetac_clouds_W.F90
+./fms_platform.h: $(SRCROOT)shared/include/fms_platform.h
+	cp $(SRCROOT)shared/include/fms_platform.h .
+./ocean_passive.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_passive.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_passive.F90 .
+./fv_arrays.F90: $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.F90 .
+./moist_conv.F90: $(SRCROOT)atmos_param/moist_conv/null/moist_conv.F90
+	cp $(SRCROOT)atmos_param/moist_conv/null/moist_conv.F90 .
+./aerosol.F90: $(SRCROOT)atmos_param/sea_esf_rad/aerosol.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/aerosol.F90 .
+./diag_cloud.F90: $(SRCROOT)atmos_param/diag_cloud/null/diag_cloud.F90
+	cp $(SRCROOT)atmos_param/diag_cloud/null/diag_cloud.F90 .
+./production.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/production.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/production.F90 .
+./ocean_residency_ml.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_ml.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_ml.F90 .
+./ocean_adv_vel_diag.F90: $(SRCROOT)mom4p1/ocean_diag/ocean_adv_vel_diag.F90
+	cp $(SRCROOT)mom4p1/ocean_diag/ocean_adv_vel_diag.F90 .
+./ice_bergs.F90: $(SRCROOT)ice_sis/ice_bergs.F90
+	cp $(SRCROOT)ice_sis/ice_bergs.F90 .
+./ocean_residency.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_residency.F90 .
+./vert_diff.F90: $(SRCROOT)atmos_param/vert_diff/vert_diff.F90
+	cp $(SRCROOT)atmos_param/vert_diff/vert_diff.F90 .
+./optical_path.F90: $(SRCROOT)atmos_param/sea_esf_rad/optical_path.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/optical_path.F90 .
+./ocean_rough.F90: $(SRCROOT)ice_param/ocean_rough.F90
+	cp $(SRCROOT)ice_param/ocean_rough.F90 .
+./ocean_xlandinsert.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandinsert.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandinsert.F90 .
+./ice_albedo.F90: $(SRCROOT)ice_param/ice_albedo.F90
+	cp $(SRCROOT)ice_param/ice_albedo.F90 .
+./model_ida_up.f90: $(SRCROOT)ida/model/model_ida_up.f90
+	cp $(SRCROOT)ida/model/model_ida_up.f90 .
+./convert_fluxes.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/convert_fluxes.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/convert_fluxes.F90 .
+./diag_clouds_W.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/diag_clouds_W.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/diag_clouds_W.F90 .
+./shr_kind_mod.F90: $(SRCROOT)atmos_fv_dynamics/model/shr_kind_mod.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/shr_kind_mod.F90 .
+./ocean_tracer_diag.F90: $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_diag.F90
+	cp $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_diag.F90 .
+./ocean_age_tracer.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_age_tracer.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_age_tracer.F90 .
+./ocean_velocity_advect.F90: $(SRCROOT)mom4p1/ocean_core/ocean_velocity_advect.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_velocity_advect.F90 .
+./moistproc_kernels.F90: $(SRCROOT)atmos_param/moist_processes/moistproc_kernels.F90
+	cp $(SRCROOT)atmos_param/moist_processes/moistproc_kernels.F90 .
+./age_of_air.F90: $(SRCROOT)atmos_fv_dynamics/tools/age_of_air.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/age_of_air.F90 .
+./cloud_obs.F90: $(SRCROOT)atmos_param/cloud_obs/null/cloud_obs.F90
+	cp $(SRCROOT)atmos_param/cloud_obs/null/cloud_obs.F90 .
+./cppdefs.h: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h .
+./cmue_d.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_d.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_d.F90 .
+./specified_clouds_W.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/specified_clouds_W.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/specified_clouds_W.F90 .
+./generic_BLING.F90: $(SRCROOT)ocean_shared/generic_tracers/generic_BLING.F90
+	cp $(SRCROOT)ocean_shared/generic_tracers/generic_BLING.F90 .
+./mo_chemini.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemini.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemini.F90 .
+./mapz_module.F90: $(SRCROOT)atmos_fv_dynamics/model/mapz_module.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/mapz_module.F90 .
+./ocean_operators.F90: $(SRCROOT)mom4p1/ocean_core/ocean_operators.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_operators.F90 .
+./ice_dyn.F90: $(SRCROOT)ice_sis/ice_dyn.F90
+	cp $(SRCROOT)ice_sis/ice_dyn.F90 .
+./cu_mo_trans.F90: $(SRCROOT)atmos_param/cu_mo_trans/cu_mo_trans.F90
+	cp $(SRCROOT)atmos_param/cu_mo_trans/cu_mo_trans.F90 .
+./ras.F90: $(SRCROOT)atmos_param/ras/ras.F90
+	cp $(SRCROOT)atmos_param/ras/ras.F90 .
+./adv_center.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/adv_center.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/adv_center.F90 .
+./ocean_lap_tracer.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_tracer.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_tracer.F90 .
+./ice_grid.F90: $(SRCROOT)ice_sis/ice_grid.F90
+	cp $(SRCROOT)ice_sis/ice_grid.F90 .
+./tp_core.F90: $(SRCROOT)atmos_fv_dynamics/model/tp_core.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/tp_core.F90 .
+./ocean_density.F90: $(SRCROOT)mom4p1/ocean_core/ocean_density.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_density.F90 .
+./esfsw_driver.F90: $(SRCROOT)atmos_param/sea_esf_rad/esfsw_driver.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/esfsw_driver.F90 .
+./diag_integral.F90: $(SRCROOT)atmos_param/diag_integral/diag_integral.F90
+	cp $(SRCROOT)atmos_param/diag_integral/diag_integral.F90 .
+./ocean_riverspread.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_riverspread.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_riverspread.F90 .
+./fs_profile.F90: $(SRCROOT)atmos_param/fsrad/null/fs_profile.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/fs_profile.F90 .
+./vert_diff_driver.F90: $(SRCROOT)atmos_param/vert_diff_driver/vert_diff_driver.F90
+	cp $(SRCROOT)atmos_param/vert_diff_driver/vert_diff_driver.F90 .
+./topo_drag.F90: $(SRCROOT)atmos_param/topo_drag/null/topo_drag.F90
+	cp $(SRCROOT)atmos_param/topo_drag/null/topo_drag.F90 .
+./diag_cloud_rad.F90: $(SRCROOT)atmos_param/diag_cloud_rad/null/diag_cloud_rad.F90
+	cp $(SRCROOT)atmos_param/diag_cloud_rad/null/diag_cloud_rad.F90 .
+./lengthscaleeq.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/lengthscaleeq.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/lengthscaleeq.F90 .
+./atmos_ch3i.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_ch3i.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_ch3i.F90 .
+./vert_advection.F90: $(SRCROOT)atmos_shared/vert_advection/vert_advection.F90
+	cp $(SRCROOT)atmos_shared/vert_advection/vert_advection.F90 .
+./pv_module.F90: $(SRCROOT)atmos_fv_dynamics/tools/pv_module.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/pv_module.F90 .
+./diff_face.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_face.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_face.F90 .
+./rad_utilities.F90: $(SRCROOT)atmos_param/sea_esf_rad/rad_utilities.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/rad_utilities.F90 .
+./potentialml.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/potentialml.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/potentialml.F90 .
+./mask.F90: $(SRCROOT)ice_sis/mask.F90
+	cp $(SRCROOT)ice_sis/mask.F90 .
+./monin_obukhov_interfaces.h: $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_interfaces.h
+	cp $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_interfaces.h .
+./rand_no.F90: $(SRCROOT)ecda/shared/eakf_sup/rand_no.F90
+	cp $(SRCROOT)ecda/shared/eakf_sup/rand_no.F90 .
+./damping_driver.F90: $(SRCROOT)atmos_param/damping_driver/damping_driver.F90
+	cp $(SRCROOT)atmos_param/damping_driver/damping_driver.F90 .
+./fv_dynamics.F90: $(SRCROOT)atmos_fv_dynamics/model/fv_dynamics.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/fv_dynamics.F90 .
+./eakf_mtv_ida_dn1.f90: $(SRCROOT)ida/eakf_mtv_ida_dn1.f90
+	cp $(SRCROOT)ida/eakf_mtv_ida_dn1.f90 .
+./fv_point.inc: $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc
+	cp $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc .
+./ocean_convect.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_convect.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_convect.F90 .
+./atmos_nudge.F90: $(SRCROOT)atmos_shared/atmos_nudge/atmos_nudge.F90
+	cp $(SRCROOT)atmos_shared/atmos_nudge/atmos_nudge.F90 .
+./ocean_obc.F90: $(SRCROOT)mom4p1/ocean_core/ocean_obc.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_obc.F90 .
+./atmos_age_tracer.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_age_tracer.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_age_tracer.F90 .
+./interpolator.F90: $(SRCROOT)atmos_shared/interpolator/interpolator.F90
+	cp $(SRCROOT)atmos_shared/interpolator/interpolator.F90 .
+./ocean_increment_eta.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_eta.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_eta.F90 .
+./rdparm.F90: $(SRCROOT)atmos_param/fsrad/null/rdparm.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/rdparm.F90 .
+./fv_diagnostics.F90: $(SRCROOT)atmos_fv_dynamics/tools/fv_diagnostics.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/fv_diagnostics.F90 .
+./atmos_sea_salt.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_sea_salt.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_sea_salt.F90 .
+./strat_clouds_W.F90: $(SRCROOT)atmos_param/sea_esf_rad/strat_clouds_W.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/strat_clouds_W.F90 .
+./lscale_cond.F90: $(SRCROOT)atmos_param/lscale_cond/null/lscale_cond.F90
+	cp $(SRCROOT)atmos_param/lscale_cond/null/lscale_cond.F90 .
+./rad_diag.F90: $(SRCROOT)atmos_param/fsrad/null/rad_diag.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/rad_diag.F90 .
+./ocean_thickness.F90: $(SRCROOT)mom4p1/ocean_core/ocean_thickness.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_thickness.F90 .
+./ocean_bbc.F90: $(SRCROOT)mom4p1/ocean_core/ocean_bbc.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_bbc.F90 .
+./par_vecsum.F90: $(SRCROOT)atmos_fv_dynamics/tools/par_vecsum.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/par_vecsum.F90 .
+./upper.F90: $(SRCROOT)atmos_fv_dynamics/tools/upper.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/upper.F90 .
+./ocean_drifters.F90: $(SRCROOT)mom4p1/ocean_diag/ocean_drifters.F90
+	cp $(SRCROOT)mom4p1/ocean_diag/ocean_drifters.F90 .
+./sealw99.F90: $(SRCROOT)atmos_param/sea_esf_rad/sealw99.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/sealw99.F90 .
+./mg_drag.F90: $(SRCROOT)atmos_param/mg_drag/mg_drag.F90
+	cp $(SRCROOT)atmos_param/mg_drag/mg_drag.F90 .
+./dyn_core.F90: $(SRCROOT)atmos_fv_dynamics/model/dyn_core.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/dyn_core.F90 .
+./stable_bl_turb.F90: $(SRCROOT)atmos_param/stable_bl_turb/stable_bl_turb.F90
+	cp $(SRCROOT)atmos_param/stable_bl_turb/stable_bl_turb.F90 .
+./mo_usrrxt.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_usrrxt.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_usrrxt.F90 .
+./obs_eakf_ida_up.F90: $(SRCROOT)ida/obs/obs_eakf_ida_up.F90
+	cp $(SRCROOT)ida/obs/obs_eakf_ida_up.F90 .
+./ocean_grids.F90: $(SRCROOT)mom4p1/ocean_core/ocean_grids.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_grids.F90 .
+./longwave_fluxes.F90: $(SRCROOT)atmos_param/sea_esf_rad/longwave_fluxes.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/longwave_fluxes.F90 .
+./eakf_tab.F90: $(SRCROOT)ecda/shared/eakf_sup/eakf_tab.F90
+	cp $(SRCROOT)ecda/shared/eakf_sup/eakf_tab.F90 .
+./ocean_po4_pre.F90: $(SRCROOT)mom4p1/ocean_bgc/ocean_po4_pre.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocean_po4_pre.F90 .
+./diffusivity.F90: $(SRCROOT)atmos_param/diffusivity/null/diffusivity.F90
+	cp $(SRCROOT)atmos_param/diffusivity/null/diffusivity.F90 .
+./lagrange.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/lagrange.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/lagrange.F90 .
+./my25_turb.F90: $(SRCROOT)atmos_param/my25_turb/null/my25_turb.F90
+	cp $(SRCROOT)atmos_param/my25_turb/null/my25_turb.F90 .
+./ocean_residency_integrand.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_integrand.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_integrand.F90 .
+./rh_clouds.F90: $(SRCROOT)atmos_param/rh_clouds/null/rh_clouds.F90
+	cp $(SRCROOT)atmos_param/rh_clouds/null/rh_clouds.F90 .
+./ocean_shortwave_csiro.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_csiro.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_csiro.F90 .
+./mcm_sw_driver.F90: $(SRCROOT)atmos_param/fsrad/null/mcm_sw_driver.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/mcm_sw_driver.F90 .
+./cov_cutoff.F90: $(SRCROOT)ecda/shared/eakf_sup/cov_cutoff.F90
+	cp $(SRCROOT)ecda/shared/eakf_sup/cov_cutoff.F90 .
+./q2over2eq.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/q2over2eq.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/q2over2eq.F90 .
+./original_fms_rad.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/original_fms_rad.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/original_fms_rad.F90 .
+./entrain.F90: $(SRCROOT)atmos_param/entrain/entrain.F90
+	cp $(SRCROOT)atmos_param/entrain/entrain.F90 .
+./ocean_velocity_diag.F90: $(SRCROOT)mom4p1/ocean_diag/ocean_velocity_diag.F90
+	cp $(SRCROOT)mom4p1/ocean_diag/ocean_velocity_diag.F90 .
+./generic_TOPAZ.F90: $(SRCROOT)ocean_shared/generic_tracers/generic_TOPAZ.F90
+	cp $(SRCROOT)ocean_shared/generic_tracers/generic_TOPAZ.F90 .
+./mo_photo.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_photo.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_photo.F90 .
+./ocean_coriolis.F90: $(SRCROOT)mom4p1/ocean_core/ocean_coriolis.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_coriolis.F90 .
+./moist_processes.F90: $(SRCROOT)atmos_param/moist_processes/moist_processes.F90
+	cp $(SRCROOT)atmos_param/moist_processes/moist_processes.F90 .
+./ocean_workspace.F90: $(SRCROOT)mom4p1/ocean_core/ocean_workspace.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_workspace.F90 .
+./dissipationeq.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/dissipationeq.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/dissipationeq.F90 .
+./ocean_form_drag.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_form_drag.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_form_drag.F90 .
+./longwave_tables.F90: $(SRCROOT)atmos_param/sea_esf_rad/longwave_tables.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/longwave_tables.F90 .
+./tracer_2d.F90: $(SRCROOT)atmos_fv_dynamics/model/tracer_2d.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/tracer_2d.F90 .
+./ocean_residency_meta.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_meta.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_meta.F90 .
+./longwave_clouds.F90: $(SRCROOT)atmos_param/sea_esf_rad/longwave_clouds.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/longwave_clouds.F90 .
+./obs_eakf_atm.F90: $(SRCROOT)ada/obs/obs_eakf_atm.F90
+	cp $(SRCROOT)ada/obs/obs_eakf_atm.F90 .
+./kbeq.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbeq.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbeq.F90 .
+./tridiagonal_gotm.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/tridiagonal_gotm.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/tridiagonal_gotm.F90 .
+./ecmfft.F90: $(SRCROOT)atmos_fv_dynamics/model/ecmfft.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/ecmfft.F90 .
+./set_eta.F90: $(SRCROOT)atmos_fv_dynamics/tools/set_eta.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/set_eta.F90 .
+./standalone_clouds.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/standalone_clouds.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/standalone_clouds.F90 .
+./rad_output_file.F90: $(SRCROOT)atmos_param/sea_esf_rad/rad_output_file.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/rad_output_file.F90 .
+./ocean_tracer_advect.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer_advect.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer_advect.F90 .
+./getmax.F90: $(SRCROOT)atmos_fv_dynamics/tools/getmax.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/getmax.F90 .
+./ocean_memory.h: $(SRCROOT)mom4p1/ocean_core/ocean_memory.h
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_memory.h .
+./tkealgebraic.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkealgebraic.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkealgebraic.F90 .
+./cloud_rad.F90: $(SRCROOT)atmos_param/cloud_rad/cloud_rad.F90
+	cp $(SRCROOT)atmos_param/cloud_rad/cloud_rad.F90 .
+./oda_driver.F90: $(SRCROOT)mom4p1/ocean_core/oda_driver.F90
+	cp $(SRCROOT)mom4p1/ocean_core/oda_driver.F90 .
+./ocean_tpm.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm.F90 .
+./ocean_increment_velocity.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_velocity.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_velocity.F90 .
+./strat_chem_utilities.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/strat_chem_utilities.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/strat_chem_utilities.F90 .
+./ocean_advection_velocity.F90: $(SRCROOT)mom4p1/ocean_core/ocean_advection_velocity.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_advection_velocity.F90 .
+./atmosphere.F90: $(SRCROOT)atmos_fv_dynamics/driver/coupled/atmosphere.F90
+	cp $(SRCROOT)atmos_fv_dynamics/driver/coupled/atmosphere.F90 .
+./cmue_b.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_b.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_b.F90 .
+./atmos_co2.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_co2.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_co2.F90 .
+./ocean_sponges_eta.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_eta.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_eta.F90 .
+./mcm_swtbls.F90: $(SRCROOT)atmos_param/fsrad/null/mcm_swtbls.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/mcm_swtbls.F90 .
+./ocean_sponges_velocity.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_velocity.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_velocity.F90 .
+./co2int.F90: $(SRCROOT)atmos_param/fsrad/null/co2int.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/co2int.F90 .
+./mo_jpl.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_jpl.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_jpl.F90 .
+./algebraiclength.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/algebraiclength.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/algebraiclength.F90 .
+./mo_imp_slv.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_imp_slv.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_imp_slv.F90 .
+./FMS_ocmip2_co2calc.F90: $(SRCROOT)ocean_shared/generic_tracers/FMS_ocmip2_co2calc.F90
+	cp $(SRCROOT)ocean_shared/generic_tracers/FMS_ocmip2_co2calc.F90 .
+./atmos_sulfate.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfate.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfate.F90 .
+./ocean_shortwave_gfdl.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_gfdl.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_gfdl.F90 .
+./mo_setinv.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setinv.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setinv.F90 .
+./timingModule.F90: $(SRCROOT)atmos_fv_dynamics/tools/timingModule.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/timingModule.F90 .
+./isccp_clouds.F90: $(SRCROOT)atmos_param/sea_esf_rad/isccp_clouds.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/isccp_clouds.F90 .
+./ice_type.F90: $(SRCROOT)ice_sis/ice_type.F90
+	cp $(SRCROOT)ice_sis/ice_type.F90 .
+./mod_comm.F90: $(SRCROOT)atmos_fv_dynamics/tools/mod_comm.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/mod_comm.F90 .
+./radiative_gases.F90: $(SRCROOT)atmos_param/sea_esf_rad/radiative_gases.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/radiative_gases.F90 .
+./ocean_residency_range.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_range.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_range.F90 .
+./shallow_conv.F90: $(SRCROOT)atmos_param/shallow_conv/null/shallow_conv.F90
+	cp $(SRCROOT)atmos_param/shallow_conv/null/shallow_conv.F90 .
+./atmos_tracer_utilities.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_utilities.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_utilities.F90 .
+./mcm_lw.F90: $(SRCROOT)atmos_param/fsrad/null/mcm_lw.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/mcm_lw.F90 .
+./lin_cloud_microphys.F90: $(SRCROOT)atmos_param/lin_cloud_microphys/lin_cloud_microphys.F90
+	cp $(SRCROOT)atmos_param/lin_cloud_microphys/lin_cloud_microphys.F90 .
+./mo_exp_slv.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_exp_slv.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_exp_slv.F90 .
+./heEnKF_ada_driver_fv.F90: $(SRCROOT)ada/heEnKF_ada_driver_fv.F90
+	cp $(SRCROOT)ada/heEnKF_ada_driver_fv.F90 .
+./rh_based_clouds.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/rh_based_clouds.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/rh_based_clouds.F90 .
+./fv_arrays.h: $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h
+	cp $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h .
+./moist_processes_utils.F90: $(SRCROOT)atmos_param/moist_processes/moist_processes_utils.F90
+	cp $(SRCROOT)atmos_param/moist_processes/moist_processes_utils.F90 .
+./atmos_convection_tracer.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_convection_tracer.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_convection_tracer.F90 .
+./ocean_sponges_tracer.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_tracer.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_tracer.F90 .
+./ocean_increment_tracer.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_tracer.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_tracer.F90 .
+./ocean_vert_chen.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_chen.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_chen.F90 .
+./ocean_bihcst_friction.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihcst_friction.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihcst_friction.F90 .
+./ocean_pressure.F90: $(SRCROOT)mom4p1/ocean_core/ocean_pressure.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_pressure.F90 .
+./ocean_util.F90: $(SRCROOT)mom4p1/ocean_core/ocean_util.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_util.F90 .
+./init_sw_ic.F90: $(SRCROOT)atmos_fv_dynamics/tools/init_sw_ic.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/init_sw_ic.F90 .
+./ocmip2_co2calc.F90: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_co2calc.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocmip2_co2calc.F90 .
+./cloudrad_diagnostics.F90: $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_diagnostics.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_diagnostics.F90 .
+./ocean_vert_kpp_mom4p0.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp_mom4p0.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp_mom4p0.F90 .
+./ocean_bgc_restore.F90: $(SRCROOT)mom4p1/ocean_bgc/ocean_bgc_restore.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocean_bgc_restore.F90 .
+./r_ratio.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/r_ratio.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/r_ratio.F90 .
+./m_tracname.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/m_tracname.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/m_tracname.F90 .
+./atmos_soa.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_soa.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_soa.F90 .
+./compute_cpsi3.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_cpsi3.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_cpsi3.F90 .
+./ocean_nphysics.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics.F90 .
+./ocean_momentum_source.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_momentum_source.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_momentum_source.F90 .
+./ocean_frazil.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_frazil.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_frazil.F90 .
+./bm_omp.F90: $(SRCROOT)atmos_param/betts_miller/bm_omp.F90
+	cp $(SRCROOT)atmos_param/betts_miller/bm_omp.F90 .
+./dry_adj.F90: $(SRCROOT)atmos_param/dry_adj/null/dry_adj.F90
+	cp $(SRCROOT)atmos_param/dry_adj/null/dry_adj.F90 .
+./obs_eakf_ida_dn.F90: $(SRCROOT)ida/obs/obs_eakf_ida_dn.F90
+	cp $(SRCROOT)ida/obs/obs_eakf_ida_dn.F90 .
+./cosp_driver.F90: $(SRCROOT)atmos_param/cosp/null/cosp_driver.F90
+	cp $(SRCROOT)atmos_param/cosp/null/cosp_driver.F90 .
+./ada_core.F90: $(SRCROOT)ada/ada_core.F90
+	cp $(SRCROOT)ada/ada_core.F90 .
+./donner_deep.F90: $(SRCROOT)atmos_param/donner_deep/null/donner_deep.F90
+	cp $(SRCROOT)atmos_param/donner_deep/null/donner_deep.F90 .
+./ocean_albedo.F90: $(SRCROOT)ice_param/ocean_albedo.F90
+	cp $(SRCROOT)ice_param/ocean_albedo.F90 .
+./diff_center.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_center.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_center.F90 .
+./util.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/util.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/util.F90 .
+./clouds.F90: $(SRCROOT)atmos_param/clouds/null/clouds.F90
+	cp $(SRCROOT)atmos_param/clouds/null/clouds.F90 .
+./ocean_sbc.F90: $(SRCROOT)mom4p1/ocean_core/ocean_sbc.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_sbc.F90 .
+./aer_ccn_act_k.F90: $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act_k.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act_k.F90 .
+./time.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/time.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/time.F90 .
+./ocean_barotropic.F90: $(SRCROOT)mom4p1/ocean_core/ocean_barotropic.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_barotropic.F90 .
+./ocean_polar_filter.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_polar_filter.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_polar_filter.F90 .
+./tropchem_driver.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/tropchem_driver.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/tropchem_driver.F90 .
+./ocean_bih_friction.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_friction.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_friction.F90 .
+./ocean_nphysics_util.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics_util.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics_util.F90 .
+./FMS_coupler_util.F90: $(SRCROOT)ocean_shared/generic_tracers/FMS_coupler_util.F90
+	cp $(SRCROOT)ocean_shared/generic_tracers/FMS_coupler_util.F90 .
+./ocean_topog.F90: $(SRCROOT)mom4p1/ocean_core/ocean_topog.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_topog.F90 .
+./tkeeq.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkeeq.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkeeq.F90 .
+./kbalgebraic.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbalgebraic.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbalgebraic.F90 .
+./fill_module.F90: $(SRCROOT)atmos_fv_dynamics/model/fill_module.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/fill_module.F90 .
+./betts_miller.F90: $(SRCROOT)atmos_param/betts_miller/betts_miller.F90
+	cp $(SRCROOT)atmos_param/betts_miller/betts_miller.F90 .
+./rot.F90: $(SRCROOT)ice_sis/rot.F90
+	cp $(SRCROOT)ice_sis/rot.F90 .
+./atmos_model.F90: $(SRCROOT)atmos_coupled/atmos_model.F90
+	cp $(SRCROOT)atmos_coupled/atmos_model.F90 .
+./ida_driver.F90: $(SRCROOT)ida/ida_driver.F90
+	cp $(SRCROOT)ida/ida_driver.F90 .
+./monin_obukhov_kernel.F90: $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_kernel.F90
+	cp $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_kernel.F90 .
+./atmos_radon.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_radon.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_radon.F90 .
+./fv_physics.F90: $(SRCROOT)atmos_fv_dynamics/driver/coupled/fv_physics.F90
+	cp $(SRCROOT)atmos_fv_dynamics/driver/coupled/fv_physics.F90 .
+./cmue_rf.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_rf.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_rf.F90 .
+./cloud_spec.F90: $(SRCROOT)atmos_param/sea_esf_rad/cloud_spec.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/cloud_spec.F90 .
+./ocean_velocity.F90: $(SRCROOT)mom4p1/ocean_core/ocean_velocity.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_velocity.F90 .
+./gridinterpol.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/gridinterpol.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/gridinterpol.F90 .
+./ode_solvers.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/ode_solvers.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/ode_solvers.F90 .
+./ocean_lap_friction.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_friction.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_friction.F90 .
+./atmos_sulfur_hex.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfur_hex.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfur_hex.F90 .
+./donner_deep_clouds_W.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/donner_deep_clouds_W.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/donner_deep_clouds_W.F90 .
+./fv_pack.F90: $(SRCROOT)atmos_fv_dynamics/model/fv_pack.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/fv_pack.F90 .
+./ocean_diagnostics.F90: $(SRCROOT)mom4p1/ocean_diag/ocean_diagnostics.F90
+	cp $(SRCROOT)mom4p1/ocean_diag/ocean_diagnostics.F90 .
+./genericeq.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/genericeq.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/genericeq.F90 .
+./bgrid_horiz.F90: $(SRCROOT)ecda/shared/bgrid/bgrid_horiz.F90
+	cp $(SRCROOT)ecda/shared/bgrid/bgrid_horiz.F90 .
+./bulkphys_rad.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/bulkphys_rad.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/bulkphys_rad.F90 .
+./lw_gases_stdtf.F90: $(SRCROOT)atmos_param/sea_esf_rad/lw_gases_stdtf.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/lw_gases_stdtf.F90 .
+./microphys_cloud.F90: $(SRCROOT)atmos_param/sea_esf_rad/microphys_cloud.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/microphys_cloud.F90 .
+./atmos_dust.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_dust.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_dust.F90 .
+./monin_obukhov.F90: $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov.F90
+	cp $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov.F90 .
+./ocean_submesoscale.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_submesoscale.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_submesoscale.F90 .
+./mo_read_sim_chm.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_read_sim_chm.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_read_sim_chm.F90 .
+./mo_hook.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_hook.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_hook.F90 .
+./longwave.F90: $(SRCROOT)atmos_param/fsrad/null/longwave.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/longwave.F90 .
+./variances.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/variances.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/variances.F90 .
+./sw_core.F90: $(SRCROOT)atmos_fv_dynamics/model/sw_core.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/sw_core.F90 .
+./mo_rodas_slv.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_rodas_slv.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_rodas_slv.F90 .
+./ocean_shortwave_jerlov.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_jerlov.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_jerlov.F90 .
+./ocean_bih_tracer.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_tracer.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_tracer.F90 .
+./aer_ccn_act.F90: $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act.F90 .
+./gotm_lib_version.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/gotm_lib_version.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/gotm_lib_version.F90 .
+./generic_CFC.F90: $(SRCROOT)ocean_shared/generic_tracers/generic_CFC.F90
+	cp $(SRCROOT)ocean_shared/generic_tracers/generic_CFC.F90 .
+./ocean_nphysicsB.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsB.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsB.F90 .
+./update_fv_phys.F90: $(SRCROOT)atmos_fv_dynamics/model/update_fv_phys.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/update_fv_phys.F90 .
+./moz.mods.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mods.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mods.F90 .
+./strat_chem_driver.F90: $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_driver.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_driver.F90 .
+./cg_drag.F90: $(SRCROOT)atmos_param/cg_drag/null/cg_drag.F90
+	cp $(SRCROOT)atmos_param/cg_drag/null/cg_drag.F90 .
+./obs_tools.F90: $(SRCROOT)ecda/shared/eakf_sup/obs_tools.F90
+	cp $(SRCROOT)ecda/shared/eakf_sup/obs_tools.F90 .
+./ice_model.F90: $(SRCROOT)ice_sis/ice_model.F90
+	cp $(SRCROOT)ice_sis/ice_model.F90 .
+./shortwave.F90: $(SRCROOT)atmos_param/fsrad/null/shortwave.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/shortwave.F90 .
+./mcm_swnew.F90: $(SRCROOT)atmos_param/fsrad/null/mcm_swnew.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/mcm_swnew.F90 .
+./ocean_vert_pp.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_pp.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_pp.F90 .
+./ocean_tpm_util.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm_util.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm_util.F90 .
+./cloud_generator.F90: $(SRCROOT)atmos_param/cloud_generator/null/cloud_generator.F90
+	cp $(SRCROOT)atmos_param/cloud_generator/null/cloud_generator.F90 .
+./ocmip2_he.F90: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_he.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocmip2_he.F90 .
+./cloudrad_package.F90: $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_package.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_package.F90 .
+./uw_conv.F90: $(SRCROOT)atmos_param/shallow_cu/null/uw_conv.F90
+	cp $(SRCROOT)atmos_param/shallow_cu/null/uw_conv.F90 .
+./ocean_vert_kpp.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp.F90 .
+./aer_in_act.F90: $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_in_act.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_in_act.F90 .
+./edt.F90: $(SRCROOT)atmos_param/edt/null/edt.F90
+	cp $(SRCROOT)atmos_param/edt/null/edt.F90 .
+./ocean_nphysicsC.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsC.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsC.F90 .
+./ocean_vert_gotm.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_gotm.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_gotm.F90 .
+./moz.mat.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mat.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mat.F90 .
+./radiation_diag.F90: $(SRCROOT)atmos_param/sea_esf_rad/radiation_diag.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/radiation_diag.F90 .
+./fk_craig.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/fk_craig.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/fk_craig.F90 .
+./atmos_carbon_aerosol.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_carbon_aerosol.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_carbon_aerosol.F90 .
+./heEnKF_model_oda.F90: $(SRCROOT)oda/model/heEnKF_model_oda.F90
+	cp $(SRCROOT)oda/model/heEnKF_model_oda.F90 .
+./fv_restart.F90: $(SRCROOT)atmos_fv_dynamics/tools/fv_restart.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/fv_restart.F90 .
+./ocean_lapgen_friction.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapgen_friction.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapgen_friction.F90 .
+./gas_tf.F90: $(SRCROOT)atmos_param/sea_esf_rad/gas_tf.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/gas_tf.F90 .
+./ocmip2_biotic.F90: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_biotic.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocmip2_biotic.F90 .
+./lhsw_driver.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/lhsw_driver.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/lhsw_driver.F90 .
+./betaDistribution.F90: $(SRCROOT)atmos_param/cloud_generator/null/betaDistribution.F90
+	cp $(SRCROOT)atmos_param/cloud_generator/null/betaDistribution.F90 .
+./ocean_vert_mix.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_mix.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_mix.F90 .
+./gmean.F90: $(SRCROOT)atmos_fv_dynamics/tools/gmean.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/gmean.F90 .
+./moz.subs.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.subs.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.subs.F90 .
+./strat_chem_model.F90: $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_model.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_model.F90 .
+./ocean_bihgen_friction.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihgen_friction.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihgen_friction.F90 .
+./ispralength.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/ispralength.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/ispralength.F90 .
+./longwave_params.F90: $(SRCROOT)atmos_param/sea_esf_rad/longwave_params.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/longwave_params.F90 .
+./pmaxmin.F90: $(SRCROOT)atmos_fv_dynamics/tools/pmaxmin.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/pmaxmin.F90 .
+./ice_spec.F90: $(SRCROOT)ice_sis/ice_spec.F90
+	cp $(SRCROOT)ice_sis/ice_spec.F90 .
+./ocean_shortwave.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave.F90 .
+./version.h: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h .
+./ocean_tempsalt.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_tempsalt.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_tempsalt.F90 .
+./ocean_sigma_transport.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_sigma_transport.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_sigma_transport.F90 .
+./uw_clouds_W.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/uw_clouds_W.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/uw_clouds_W.F90 .
+./microphys_rad.F90: $(SRCROOT)atmos_param/sea_esf_rad/microphys_rad.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/microphys_rad.F90 .
+./compute_rist.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_rist.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_rist.F90 .
+./ocean_domains.F90: $(SRCROOT)mom4p1/ocean_core/ocean_domains.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_domains.F90 .
+./kpp.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kpp.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kpp.F90 .
+./ice_thm.F90: $(SRCROOT)ice_sis/ice_thm.F90
+	cp $(SRCROOT)ice_sis/ice_thm.F90 .
+./eakf_ada.F90: $(SRCROOT)ada/eakf_ada.F90
+	cp $(SRCROOT)ada/eakf_ada.F90 .
+./vert_turb_driver.F90: $(SRCROOT)atmos_param/vert_turb_driver/vert_turb_driver.F90
+	cp $(SRCROOT)atmos_param/vert_turb_driver/vert_turb_driver.F90 .
+./alpha_mnb.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/alpha_mnb.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/alpha_mnb.F90 .
+./epsbalgebraic.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/epsbalgebraic.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/epsbalgebraic.F90 .
+./hconst.F90: $(SRCROOT)atmos_param/fsrad/null/hconst.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/hconst.F90 .
+./ocean_rivermix.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_rivermix.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_rivermix.F90 .
+./generic_tracer.F90: $(SRCROOT)ocean_shared/generic_tracers/generic_tracer.F90
+	cp $(SRCROOT)ocean_shared/generic_tracers/generic_tracer.F90 .
+./ocean_ibgc.F90: $(SRCROOT)mom4p1/ocean_bgc/ocean_ibgc.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocean_ibgc.F90 .
+./ocean_model.F90: $(SRCROOT)mom4p1/ocean_core/ocean_model.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_model.F90 .
+./ocean_vert_tidal.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_tidal.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_tidal.F90 .
+./ocean_tracer_util.F90: $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_util.F90
+	cp $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_util.F90 .
+./grey_radiation.F90: $(SRCROOT)atmos_param/grey_radiation/grey_radiation.F90
+	cp $(SRCROOT)atmos_param/grey_radiation/grey_radiation.F90 .
+./generic_tracer_utils.F90: $(SRCROOT)ocean_shared/generic_tracers/generic_tracer_utils.F90
+	cp $(SRCROOT)ocean_shared/generic_tracers/generic_tracer_utils.F90 .
+./heEnKF_hea_eakf_oda.F90: $(SRCROOT)oda/heEnKF_hea_eakf_oda.F90
+	cp $(SRCROOT)oda/heEnKF_hea_eakf_oda.F90 .
+./init_dry_atm.F90: $(SRCROOT)atmos_fv_dynamics/tools/init_dry_atm.F90
+	cp $(SRCROOT)atmos_fv_dynamics/tools/init_dry_atm.F90 .
+./fsrad.F90: $(SRCROOT)atmos_param/fsrad/null/fsrad.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/fsrad.F90 .
+./ocean_mixdownslope.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_mixdownslope.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_mixdownslope.F90 .
+./esfsw_parameters.F90: $(SRCROOT)atmos_param/sea_esf_rad/esfsw_parameters.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/esfsw_parameters.F90 .
+./ocmip2_abiotic.F90: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_abiotic.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocmip2_abiotic.F90 .
+./ocean_overflow.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_overflow.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_overflow.F90 .
+./model_ada.F90: $(SRCROOT)ada/model/model_ada.F90
+	cp $(SRCROOT)ada/model/model_ada.F90 .
+./ocean_overexchange.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_overexchange.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_overexchange.F90 .
+./ocean_vert_const.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_const.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_const.F90 .
+./turbulence.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/turbulence.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/turbulence.F90 .
+./shortwave_driver.F90: $(SRCROOT)atmos_param/sea_esf_rad/shortwave_driver.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/shortwave_driver.F90 .
+./cloud_zonal.F90: $(SRCROOT)atmos_param/cloud_zonal/null/cloud_zonal.F90
+	cp $(SRCROOT)atmos_param/cloud_zonal/null/cloud_zonal.F90 .
+./eqstate.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/eqstate.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/eqstate.F90 .
+./cmue_a.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_a.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_a.F90 .
+./ocean_xlandmix.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandmix.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandmix.F90 .
+./zetac_clouds_W.F90: $(SRCROOT)atmos_param/sea_esf_rad/zetac_clouds_W.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/zetac_clouds_W.F90 .
+./radiation_driver.F90: $(SRCROOT)atmos_param/radiation_driver/radiation_driver.F90
+	cp $(SRCROOT)atmos_param/radiation_driver/radiation_driver.F90 .
+./ida_core.F90: $(SRCROOT)ida/ida_core.F90
+	cp $(SRCROOT)ida/ida_core.F90 .
+./longwave_driver.F90: $(SRCROOT)atmos_param/sea_esf_rad/longwave_driver.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/longwave_driver.F90 .
+./ozone.F90: $(SRCROOT)atmos_param/sea_esf_rad/ozone.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/ozone.F90 .
+./mo_setsox.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setsox.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setsox.F90 .
+./cmue_c.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_c.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_c.F90 .
+./assim_tools.F90: $(SRCROOT)ecda/shared/eakf_sup/assim_tools.F90
+	cp $(SRCROOT)ecda/shared/eakf_sup/assim_tools.F90 .
+./bgrid_vert.F90: $(SRCROOT)ecda/shared/bgrid/bgrid_vert.F90
+	cp $(SRCROOT)ecda/shared/bgrid/bgrid_vert.F90 .
+./ocmip2_cfc.F90: $(SRCROOT)mom4p1/ocean_bgc/ocmip2_cfc.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocmip2_cfc.F90 .
+./ocean_generic_tracer.F90: $(SRCROOT)mom4p1/ocean_bgc/ocean_generic_tracer.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocean_generic_tracer.F90 .
+./ocean_pert_co2.F90: $(SRCROOT)mom4p1/ocean_bgc/ocean_pert_co2.F90
+	cp $(SRCROOT)mom4p1/ocean_bgc/ocean_pert_co2.F90 .
+./obs_eakf_ocn.F90: $(SRCROOT)oda/obs/obs_eakf_ocn.F90
+	cp $(SRCROOT)oda/obs/obs_eakf_ocn.F90 .
+./physics_driver.F90: $(SRCROOT)atmos_param/physics_driver/physics_driver.F90
+	cp $(SRCROOT)atmos_param/physics_driver/physics_driver.F90 .
+./mo_chem_utls.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chem_utls.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chem_utls.F90 .
+./cmue_ma.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_ma.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_ma.F90 .
+./co2_data.F90: $(SRCROOT)atmos_param/fsrad/null/co2_data.F90
+	cp $(SRCROOT)atmos_param/fsrad/null/co2_data.F90 .
+./ocean_lapcst_friction.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapcst_friction.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapcst_friction.F90 .
+./pft_module.F90: $(SRCROOT)atmos_fv_dynamics/model/pft_module.F90
+	cp $(SRCROOT)atmos_fv_dynamics/model/pft_module.F90 .
+./eakf_mtv_ida_up.f90: $(SRCROOT)ida/eakf_mtv_ida_up.f90
+	cp $(SRCROOT)ida/eakf_mtv_ida_up.f90 .
+./internal_wave.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/internal_wave.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/internal_wave.F90 .
+./model_ida_dn1.f90: $(SRCROOT)ida/model/model_ida_dn1.f90
+	cp $(SRCROOT)ida/model/model_ida_dn1.f90 .
+./cmue_sg.F90: $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_sg.F90
+	cp $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_sg.F90 .
+./ida_types.F90: $(SRCROOT)ida/ida_types.F90
+	cp $(SRCROOT)ida/ida_types.F90 .
+./ocean_parameters.F90: $(SRCROOT)mom4p1/ocean_core/ocean_parameters.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_parameters.F90 .
+./loc_and_dist.F90: $(SRCROOT)ecda/shared/eakf_sup/loc_and_dist.F90
+	cp $(SRCROOT)ecda/shared/eakf_sup/loc_and_dist.F90 .
+./atmos_tracer_driver.F90: $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_driver.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_driver.F90 .
+./ocean_time_filter.F90: $(SRCROOT)mom4p1/ocean_param/sources/ocean_time_filter.F90
+	cp $(SRCROOT)mom4p1/ocean_param/sources/ocean_time_filter.F90 .
+./bm_massflux.F90: $(SRCROOT)atmos_param/betts_miller/bm_massflux.F90
+	cp $(SRCROOT)atmos_param/betts_miller/bm_massflux.F90 .
+./ocean_nphysicsA.F90: $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsA.F90
+	cp $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsA.F90 .
+./heEnKF_oda_driver_ecda.F90: $(SRCROOT)oda/heEnKF_oda_driver_ecda.F90
+	cp $(SRCROOT)oda/heEnKF_oda_driver_ecda.F90 .
+./aerosolrad_package.F90: $(SRCROOT)atmos_param/sea_esf_rad/aerosolrad_package.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/aerosolrad_package.F90 .
+./transport_matrix.F90: $(SRCROOT)mom4p1/ocean_tracers/transport_matrix.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/transport_matrix.F90 .
+./sea_esf_rad.F90: $(SRCROOT)atmos_param/sea_esf_rad/sea_esf_rad.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/sea_esf_rad.F90 .
+./ocean_tracer.F90: $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer.F90
+	cp $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer.F90 .
+./strat_cloud.F90: $(SRCROOT)atmos_param/strat_cloud/strat_cloud.F90
+	cp $(SRCROOT)atmos_param/strat_cloud/strat_cloud.F90 .
+./ada_types.F90: $(SRCROOT)ada/ada_types.F90
+	cp $(SRCROOT)ada/ada_types.F90 .
+./ocean_types.F90: $(SRCROOT)mom4p1/ocean_core/ocean_types.F90
+	cp $(SRCROOT)mom4p1/ocean_core/ocean_types.F90 .
+./mgrp_prscr_clds.F90: $(SRCROOT)atmos_param/sea_esf_rad/null/mgrp_prscr_clds.F90
+	cp $(SRCROOT)atmos_param/sea_esf_rad/null/mgrp_prscr_clds.F90 .
+./mo_chemdr.F90: $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemdr.F90
+	cp $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemdr.F90 .
+SRC = $(SRCROOT)ice_param/ocean_albedo.F90 $(SRCROOT)atmos_param/rh_clouds/null/rh_clouds.F90 $(SRCROOT)atmos_param/diffusivity/null/diffusivity.F90 $(SRCROOT)atmos_param/sea_esf_rad/ozone.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandinsert.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_sigma_transport.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_params.F90 $(SRCROOT)atmos_fv_dynamics/tools/upper.F90 $(SRCROOT)atmos_param/physics_driver/physics_driver.F90 $(SRCROOT)atmos_param/shallow_cu/null/uw_conv.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemini.F90 $(SRCROOT)mom4p1/ocean_core/ocean_grids.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mat.F90 $(SRCROOT)atmos_param/sea_esf_rad/rad_utilities.F90 $(SRCROOT)atmos_fv_dynamics/tools/mod_comm.F90 $(SRCROOT)atmos_param/cloud_zonal/null/cloud_zonal.F90 $(SRCROOT)ida/obs/obs_eakf_ida_up.F90 $(SRCROOT)atmos_param/sea_esf_rad/isccp_clouds.F90 $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_model.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_tables.F90 $(SRCROOT)ice_sis/ice_dyn.F90 $(SRCROOT)atmos_fv_dynamics/model/tp_core.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_adv_vel_diag.F90 $(SRCROOT)atmos_param/sea_esf_rad/shortwave_driver.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_dynamics.F90 $(SRCROOT)atmos_param/cloud_rad/cloud_rad.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihgen_friction.F90 $(SRCROOT)atmos_fv_dynamics/tools/getmax.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_mixdownslope.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_abiotic.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kpp.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/bulkphys_rad.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_age_tracer.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_diagnostics.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_tracer_utils.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/ode_solvers.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_time_filter.F90 $(SRCROOT)ocean_shared/generic_tracers/FMS_coupler_util.F90 $(SRCROOT)atmos_param/sea_esf_rad/sea_esf_rad.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_swnew.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_velocity.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsB.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapcst_friction.F90 $(SRCROOT)atmos_param/sea_esf_rad/zetac_clouds_W.F90 $(SRCROOT)atmos_param/vert_diff_driver/vert_diff_driver.F90 $(SRCROOT)mom4p1/ocean_core/oda_driver.F90 $(SRCROOT)mom4p1/ocean_core/ocean_bbc.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_passive.F90 $(SRCROOT)ice_param/ice_albedo.F90 $(SRCROOT)mom4p1/ocean_core/ocean_velocity_advect.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_convection_tracer.F90 $(SRCROOT)atmos_param/stable_bl_turb/stable_bl_turb.F90 $(SRCROOT)mom4p1/ocean_core/ocean_model.F90 $(SRCROOT)atmos_fv_dynamics/tools/init_sw_ic.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/internal_wave.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/alpha_mnb.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_frazil.F90 $(SRCROOT)atmos_param/cloud_obs/null/cloud_obs.F90 $(SRCROOT)atmos_param/betts_miller/bm_massflux.F90 $(SRCROOT)mom4p1/ocean_core/ocean_density.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_velocity.F90 $(SRCROOT)ida/model/model_ida_dn1.f90 $(SRCROOT)ecda/shared/eakf_sup/loc_and_dist.F90 $(SRCROOT)mom4p1/ocean_core/ocean_coriolis.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_overexchange.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer_advect.F90 $(SRCROOT)ecda/shared/eakf_sup/rand_no.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_rivermix.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_biotic.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_pert_co2.F90 $(SRCROOT)atmos_param/grey_radiation/grey_radiation.F90 $(SRCROOT)atmos_param/fsrad/null/co2int.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_usrrxt.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_bgc_restore.F90 $(SRCROOT)atmos_shared/atmos_nudge/atmos_nudge.F90 $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_diagnostics.F90 $(SRCROOT)ada/eakf_ada.F90 $(SRCROOT)atmos_fv_dynamics/tools/pmaxmin.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mods.F90 $(SRCROOT)ocean_shared/generic_tracers/FMS_ocmip2_co2calc.F90 $(SRCROOT)atmos_param/fsrad/null/fsrad.F90 $(SRCROOT)atmos_param/radiation_driver/radiation_driver.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/eqstate.F90 $(SRCROOT)ida/eakf_mtv_ida_dn1.f90 $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_driver.F90 $(SRCROOT)atmos_param/clouds/null/clouds.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_dust.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chem_utls.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/adv_center.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_overflow.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_exp_slv.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_face.F90 $(SRCROOT)ada/ada_types.F90 $(SRCROOT)atmos_param/lscale_cond/null/lscale_cond.F90 $(SRCROOT)mom4p1/ocean_core/ocean_velocity.F90 $(SRCROOT)ada/model/model_ada.F90 $(SRCROOT)atmos_param/vert_diff/vert_diff.F90 $(SRCROOT)atmos_param/sea_esf_rad/aerosol.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfate.F90 $(SRCROOT)atmos_param/fsrad/null/shortwave.F90 $(SRCROOT)atmos_fv_dynamics/tools/age_of_air.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_cfc.F90 $(SRCROOT)atmos_param/cloud_generator/null/cloud_generator.F90 $(SRCROOT)ecda/shared/eakf_sup/obs_tools.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/time.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkeeq.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/diag_clouds_W.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_jpl.F90 $(SRCROOT)atmos_param/vert_turb_driver/vert_turb_driver.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/potentialml.F90 $(SRCROOT)ice_param/ocean_rough.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_mix.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapgen_friction.F90 $(SRCROOT)atmos_param/sea_esf_rad/gas_tf.F90 $(SRCROOT)atmos_fv_dynamics/model/dyn_core.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_convect.F90 $(SRCROOT)atmos_shared/interpolator/interpolator.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_velocity_diag.F90 $(SRCROOT)atmos_param/damping_driver/damping_driver.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_eta.F90 $(SRCROOT)atmos_param/sea_esf_rad/esfsw_driver.F90 $(SRCROOT)mom4p1/ocean_core/ocean_topog.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/convert_fluxes.F90 $(SRCROOT)oda/obs/obs_eakf_ocn.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_tracer.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihcst_friction.F90 $(SRCROOT)ecda/shared/bgrid/bgrid_horiz.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_drifters.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_csiro.F90 $(SRCROOT)ida/model/model_ida_up.f90 $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_utilities.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_BLING.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_hook.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_po4_pre.F90 $(SRCROOT)mom4p1/ocean_core/ocean_thickness.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/epsbalgebraic.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_submesoscale.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/tridiagonal_gotm.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_fluxes.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_eta.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_generic_tracer.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_lw.F90 $(SRCROOT)atmos_param/topo_drag/null/topo_drag.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/gridinterpol.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/lagrange.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/turbulence.F90 $(SRCROOT)atmos_fv_dynamics/tools/set_eta.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_jerlov.F90 $(SRCROOT)atmos_param/donner_deep/null/donner_deep.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_diag.F90 $(SRCROOT)atmos_param/sea_esf_rad/microphys_rad.F90 $(SRCROOT)mom4p1/ocean_core/ocean_sbc.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_ml.F90 $(SRCROOT)atmos_param/moist_conv/null/moist_conv.F90 $(SRCROOT)atmos_param/sea_esf_rad/sealw99.F90 $(SRCROOT)atmos_fv_dynamics/tools/fv_diagnostics.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemdr.F90 $(SRCROOT)atmos_fv_dynamics/driver/coupled/atmosphere.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_CFC.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_photo.F90 $(SRCROOT)ecda/shared/bgrid/bgrid_vert.F90 $(SRCROOT)ecda/shared/eakf_sup/cov_cutoff.F90 $(SRCROOT)mom4p1/ocean_core/ocean_advection_velocity.F90 $(SRCROOT)oda/heEnKF_hea_eakf_oda.F90 $(SRCROOT)ida/ida_core.F90 $(SRCROOT)atmos_param/moist_processes/moist_processes.F90 $(SRCROOT)ice_sis/ice_type.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_a.F90 $(SRCROOT)ice_sis/ice_spec.F90 $(SRCROOT)ecda/shared/eakf_sup/eakf_tab.F90 $(SRCROOT)ada/heEnKF_ada_driver_fv.F90 $(SRCROOT)atmos_param/cloud_generator/null/betaDistribution.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_c.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/rh_based_clouds.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_carbon_aerosol.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_sw_driver.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_cpsi3.F90 $(SRCROOT)atmos_param/mg_drag/mg_drag.F90 $(SRCROOT)mom4p1/ocean_core/ocean_domains.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkealgebraic.F90 $(SRCROOT)ice_sis/ice_thm.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_age_tracer.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/q2over2eq.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_pack.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_rodas_slv.F90 $(SRCROOT)atmos_param/sea_esf_rad/lw_gases_stdtf.F90 $(SRCROOT)atmos_fv_dynamics/model/mapz_module.F90 $(SRCROOT)atmos_param/dry_adj/null/dry_adj.F90 $(SRCROOT)atmos_param/entrain/entrain.F90 $(SRCROOT)atmos_fv_dynamics/tools/init_dry_atm.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_momentum_source.F90 $(SRCROOT)atmos_param/moist_processes/moist_processes_utils.F90 $(SRCROOT)ice_sis/ice_model.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_tracer.F90 $(SRCROOT)atmos_fv_dynamics/tools/timingModule.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setsox.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/genericeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_ma.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_riverspread.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_clouds.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_tidal.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_meta.F90 $(SRCROOT)mom4p1/ocean_tracers/transport_matrix.F90 $(SRCROOT)ida/eakf_mtv_ida_up.f90 $(SRCROOT)mom4p1/ocean_core/ocean_barotropic.F90 $(SRCROOT)atmos_fv_dynamics/tools/gmean.F90 $(SRCROOT)ice_sis/ice_bergs.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setinv.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_he.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_form_drag.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbalgebraic.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm_util.F90 $(SRCROOT)atmos_param/edt/null/edt.F90 $(SRCROOT)mom4p1/ocean_core/ocean_workspace.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_soa.F90 $(SRCROOT)atmos_fv_dynamics/model/update_fv_phys.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/gotm_lib_version.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics.F90 $(SRCROOT)oda/model/heEnKF_model_oda.F90 $(SRCROOT)atmos_shared/vert_advection/vert_advection.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics_util.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_polar_filter.F90 $(SRCROOT)atmos_param/cosp/null/cosp_driver.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_tracer.F90 $(SRCROOT)atmos_param/my25_turb/null/my25_turb.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_util.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_const.F90 $(SRCROOT)ada/obs/obs_eakf_atm.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/ispralength.F90 $(SRCROOT)atmos_param/sea_esf_rad/aerosolrad_package.F90 $(SRCROOT)mom4p1/ocean_core/ocean_types.F90 $(SRCROOT)atmos_param/lin_cloud_microphys/lin_cloud_microphys.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/mgrp_prscr_clds.F90 $(SRCROOT)atmos_param/ras/ras.F90 $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_kernel.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_integrand.F90 $(SRCROOT)oda/heEnKF_oda_driver_ecda.F90 $(SRCROOT)atmos_param/sea_esf_rad/cloud_spec.F90 $(SRCROOT)atmos_param/sea_esf_rad/optical_path.F90 $(SRCROOT)atmos_param/fsrad/null/longwave.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsC.F90 $(SRCROOT)ice_sis/rot.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_friction.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_driver.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandmix.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/original_fms_rad.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_TOPAZ.F90 $(SRCROOT)ida/obs/obs_eakf_ida_dn.F90 $(SRCROOT)atmos_param/diag_cloud_rad/null/diag_cloud_rad.F90 $(SRCROOT)ida/ida_driver.F90 $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act_k.F90 $(SRCROOT)mom4p1/ocean_core/ocean_parameters.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/lhsw_driver.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp_mom4p0.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_d.F90 $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act.F90 $(SRCROOT)atmos_fv_dynamics/model/sw_core.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_rist.F90 $(SRCROOT)atmos_param/strat_cloud/strat_cloud.F90 $(SRCROOT)ecda/shared/eakf_sup/assim_tools.F90 $(SRCROOT)atmos_coupled/atmos_model.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/strat_chem_utilities.F90 $(SRCROOT)atmos_param/cg_drag/null/cg_drag.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_ibgc.F90 $(SRCROOT)atmos_fv_dynamics/tools/pv_module.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/standalone_clouds.F90 $(SRCROOT)atmos_param/fsrad/null/rdparm.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/util.F90 $(SRCROOT)atmos_fv_dynamics/model/fill_module.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_co2calc.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_center.F90 $(SRCROOT)atmos_fv_dynamics/driver/coupled/fv_physics.F90 $(SRCROOT)atmos_param/cu_mo_trans/cu_mo_trans.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_read_sim_chm.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_gotm.F90 $(SRCROOT)atmos_param/diag_cloud/null/diag_cloud.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsA.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_range.F90 $(SRCROOT)ada/ada_core.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_b.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/specified_clouds_W.F90 $(SRCROOT)atmos_fv_dynamics/tools/fv_restart.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_sea_salt.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_imp_slv.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_sg.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/lengthscaleeq.F90 $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_package.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_gfdl.F90 $(SRCROOT)mom4p1/ocean_core/ocean_obc.F90 $(SRCROOT)atmos_param/diag_integral/diag_integral.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_tracer.F90 $(SRCROOT)atmos_param/shallow_conv/null/shallow_conv.F90 $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/donner_deep_clouds_W.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/uw_clouds_W.F90 $(SRCROOT)atmos_param/betts_miller/betts_miller.F90 $(SRCROOT)mom4p1/ocean_core/ocean_util.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/dissipationeq.F90 $(SRCROOT)mom4p1/ocean_core/ocean_operators.F90 $(SRCROOT)atmos_param/sea_esf_rad/microphys_cloud.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_ch3i.F90 $(SRCROOT)atmos_fv_dynamics/tools/par_vecsum.F90 $(SRCROOT)atmos_fv_dynamics/model/pft_module.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/production.F90 $(SRCROOT)atmos_fv_dynamics/model/shr_kind_mod.F90 $(SRCROOT)atmos_param/sea_esf_rad/rad_output_file.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/fk_craig.F90 $(SRCROOT)atmos_param/moist_processes/moistproc_kernels.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_chen.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/algebraiclength.F90 $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_in_act.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_radon.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfur_hex.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_pp.F90 $(SRCROOT)atmos_param/fsrad/null/rad_diag.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_co2.F90 $(SRCROOT)atmos_param/fsrad/null/co2_data.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/variances.F90 $(SRCROOT)atmos_param/sea_esf_rad/strat_clouds_W.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/tropchem_driver.F90 $(SRCROOT)atmos_fv_dynamics/model/tracer_2d.F90 $(SRCROOT)atmos_param/sea_esf_rad/radiative_gases.F90 $(SRCROOT)mom4p1/ocean_core/ocean_pressure.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/m_tracname.F90 $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_driver.F90 $(SRCROOT)atmos_param/fsrad/null/hconst.F90 $(SRCROOT)ice_sis/ice_grid.F90 $(SRCROOT)atmos_param/sea_esf_rad/radiation_diag.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_tracer.F90 $(SRCROOT)ice_sis/mask.F90 $(SRCROOT)ida/ida_types.F90 $(SRCROOT)atmos_param/betts_miller/bm_omp.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_friction.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tempsalt.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_swtbls.F90 $(SRCROOT)atmos_param/sea_esf_rad/esfsw_parameters.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.subs.F90 $(SRCROOT)atmos_fv_dynamics/model/ecmfft.F90 $(SRCROOT)atmos_param/fsrad/null/fs_profile.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/r_ratio.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_rf.F90 $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_interfaces.h $(SRCROOT)mom4p1/ocean_core/ocean_memory.h $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h
+OBJ = ocean_albedo.o rh_clouds.o diffusivity.o ozone.o ocean_xlandinsert.o ocean_sigma_transport.o longwave_params.o upper.o physics_driver.o uw_conv.o mo_chemini.o ocean_grids.o moz.mat.o rad_utilities.o mod_comm.o cloud_zonal.o obs_eakf_ida_up.o isccp_clouds.o strat_chem_model.o longwave_tables.o ice_dyn.o tp_core.o ocean_adv_vel_diag.o shortwave_driver.o fv_dynamics.o cloud_rad.o ocean_bihgen_friction.o getmax.o ocean_mixdownslope.o ocmip2_abiotic.o kpp.o bulkphys_rad.o atmos_age_tracer.o ocean_diagnostics.o generic_tracer_utils.o ocean_residency.o ode_solvers.o ocean_time_filter.o FMS_coupler_util.o sea_esf_rad.o mcm_swnew.o ocean_sponges_velocity.o ocean_nphysicsB.o ocean_lapcst_friction.o zetac_clouds_W.o vert_diff_driver.o oda_driver.o ocean_bbc.o ocean_passive.o ice_albedo.o ocean_velocity_advect.o atmos_convection_tracer.o stable_bl_turb.o ocean_model.o init_sw_ic.o internal_wave.o alpha_mnb.o ocean_frazil.o cloud_obs.o bm_massflux.o ocean_density.o ocean_increment_velocity.o model_ida_dn1.o loc_and_dist.o ocean_coriolis.o ocean_overexchange.o ocean_tracer_advect.o rand_no.o ocean_rivermix.o ocmip2_biotic.o ocean_pert_co2.o grey_radiation.o co2int.o mo_usrrxt.o ocean_bgc_restore.o atmos_nudge.o cloudrad_diagnostics.o eakf_ada.o pmaxmin.o moz.mods.o FMS_ocmip2_co2calc.o fsrad.o radiation_driver.o eqstate.o eakf_mtv_ida_dn1.o atmos_tracer_driver.o clouds.o fv_arrays.o atmos_dust.o mo_chem_utls.o adv_center.o ocean_overflow.o mo_exp_slv.o diff_face.o ada_types.o lscale_cond.o ocean_velocity.o model_ada.o vert_diff.o aerosol.o atmos_sulfate.o shortwave.o age_of_air.o ocmip2_cfc.o cloud_generator.o obs_tools.o time.o tkeeq.o diag_clouds_W.o ocean_vert_kpp.o mo_jpl.o vert_turb_driver.o potentialml.o ocean_rough.o ocean_vert_mix.o ocean_lapgen_friction.o gas_tf.o dyn_core.o ocean_convect.o interpolator.o ocean_velocity_diag.o damping_driver.o ocean_increment_eta.o esfsw_driver.o ocean_topog.o convert_fluxes.o obs_eakf_ocn.o ocean_sponges_tracer.o ocean_bihcst_friction.o bgrid_horiz.o ocean_drifters.o ocean_shortwave_csiro.o model_ida_up.o atmos_tracer_utilities.o generic_BLING.o mo_hook.o ocean_po4_pre.o ocean_thickness.o epsbalgebraic.o ocean_submesoscale.o tridiagonal_gotm.o longwave_fluxes.o ocean_sponges_eta.o ocean_generic_tracer.o mcm_lw.o topo_drag.o gridinterpol.o lagrange.o turbulence.o set_eta.o ocean_shortwave_jerlov.o donner_deep.o ocean_tracer_diag.o microphys_rad.o ocean_sbc.o ocean_residency_ml.o moist_conv.o sealw99.o fv_diagnostics.o mo_chemdr.o atmosphere.o generic_CFC.o mo_photo.o bgrid_vert.o cov_cutoff.o ocean_advection_velocity.o heEnKF_hea_eakf_oda.o ida_core.o moist_processes.o ice_type.o cmue_a.o ice_spec.o eakf_tab.o heEnKF_ada_driver_fv.o betaDistribution.o cmue_c.o rh_based_clouds.o atmos_carbon_aerosol.o mcm_sw_driver.o compute_cpsi3.o mg_drag.o ocean_domains.o tkealgebraic.o ice_thm.o ocean_age_tracer.o q2over2eq.o fv_pack.o mo_rodas_slv.o lw_gases_stdtf.o mapz_module.o dry_adj.o entrain.o init_dry_atm.o ocean_momentum_source.o moist_processes_utils.o ice_model.o ocean_bih_tracer.o timingModule.o mo_setsox.o genericeq.o cmue_ma.o ocean_tracer.o ocean_riverspread.o longwave_clouds.o ocean_vert_tidal.o ocean_residency_meta.o transport_matrix.o eakf_mtv_ida_up.o ocean_barotropic.o gmean.o ice_bergs.o mo_setinv.o ocmip2_he.o ocean_form_drag.o kbalgebraic.o ocean_tpm_util.o edt.o ocean_workspace.o atmos_soa.o update_fv_phys.o gotm_lib_version.o ocean_shortwave.o ocean_nphysics.o heEnKF_model_oda.o vert_advection.o ocean_nphysics_util.o ocean_polar_filter.o cosp_driver.o generic_tracer.o my25_turb.o ocean_tracer_util.o ocean_vert_const.o obs_eakf_atm.o ispralength.o aerosolrad_package.o ocean_types.o lin_cloud_microphys.o mgrp_prscr_clds.o ras.o monin_obukhov_kernel.o ocean_residency_integrand.o heEnKF_oda_driver_ecda.o cloud_spec.o optical_path.o longwave.o ocean_nphysicsC.o rot.o ocean_lap_friction.o longwave_driver.o ocean_xlandmix.o original_fms_rad.o generic_TOPAZ.o obs_eakf_ida_dn.o diag_cloud_rad.o ida_driver.o aer_ccn_act_k.o ocean_parameters.o lhsw_driver.o ocean_vert_kpp_mom4p0.o cmue_d.o aer_ccn_act.o sw_core.o compute_rist.o strat_cloud.o assim_tools.o atmos_model.o strat_chem_utilities.o cg_drag.o ocean_ibgc.o pv_module.o standalone_clouds.o rdparm.o util.o fill_module.o ocmip2_co2calc.o kbeq.o diff_center.o fv_physics.o cu_mo_trans.o mo_read_sim_chm.o ocean_vert_gotm.o diag_cloud.o ocean_nphysicsA.o ocean_residency_range.o ada_core.o cmue_b.o specified_clouds_W.o fv_restart.o atmos_sea_salt.o mo_imp_slv.o cmue_sg.o lengthscaleeq.o cloudrad_package.o ocean_shortwave_gfdl.o ocean_obc.o diag_integral.o ocean_lap_tracer.o shallow_conv.o monin_obukhov.o donner_deep_clouds_W.o uw_clouds_W.o betts_miller.o ocean_util.o ocean_tpm.o dissipationeq.o ocean_operators.o microphys_cloud.o atmos_ch3i.o par_vecsum.o pft_module.o production.o shr_kind_mod.o rad_output_file.o fk_craig.o moistproc_kernels.o ocean_vert_chen.o algebraiclength.o aer_in_act.o atmos_radon.o atmos_sulfur_hex.o ocean_vert_pp.o rad_diag.o atmos_co2.o co2_data.o variances.o strat_clouds_W.o tropchem_driver.o tracer_2d.o radiative_gases.o ocean_pressure.o m_tracname.o strat_chem_driver.o hconst.o ice_grid.o radiation_diag.o ocean_increment_tracer.o mask.o ida_types.o bm_omp.o ocean_bih_friction.o ocean_tempsalt.o mcm_swtbls.o esfsw_parameters.o moz.subs.o ecmfft.o fs_profile.o r_ratio.o cmue_rf.o
+OFF = $(SRCROOT)shared/include/fms_platform.h $(SRCROOT)mom4p1/ocean_tracers/ocean_passive.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.F90 $(SRCROOT)atmos_param/moist_conv/null/moist_conv.F90 $(SRCROOT)atmos_param/sea_esf_rad/aerosol.F90 $(SRCROOT)atmos_param/diag_cloud/null/diag_cloud.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/production.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_ml.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_adv_vel_diag.F90 $(SRCROOT)ice_sis/ice_bergs.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency.F90 $(SRCROOT)atmos_param/vert_diff/vert_diff.F90 $(SRCROOT)atmos_param/sea_esf_rad/optical_path.F90 $(SRCROOT)ice_param/ocean_rough.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandinsert.F90 $(SRCROOT)ice_param/ice_albedo.F90 $(SRCROOT)ida/model/model_ida_up.f90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/convert_fluxes.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/diag_clouds_W.F90 $(SRCROOT)atmos_fv_dynamics/model/shr_kind_mod.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_diag.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_age_tracer.F90 $(SRCROOT)mom4p1/ocean_core/ocean_velocity_advect.F90 $(SRCROOT)atmos_param/moist_processes/moistproc_kernels.F90 $(SRCROOT)atmos_fv_dynamics/tools/age_of_air.F90 $(SRCROOT)atmos_param/cloud_obs/null/cloud_obs.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/cppdefs.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_d.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/specified_clouds_W.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_BLING.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemini.F90 $(SRCROOT)atmos_fv_dynamics/model/mapz_module.F90 $(SRCROOT)mom4p1/ocean_core/ocean_operators.F90 $(SRCROOT)ice_sis/ice_dyn.F90 $(SRCROOT)atmos_param/cu_mo_trans/cu_mo_trans.F90 $(SRCROOT)atmos_param/ras/ras.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/adv_center.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_tracer.F90 $(SRCROOT)ice_sis/ice_grid.F90 $(SRCROOT)atmos_fv_dynamics/model/tp_core.F90 $(SRCROOT)mom4p1/ocean_core/ocean_density.F90 $(SRCROOT)atmos_param/sea_esf_rad/esfsw_driver.F90 $(SRCROOT)atmos_param/diag_integral/diag_integral.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_riverspread.F90 $(SRCROOT)atmos_param/fsrad/null/fs_profile.F90 $(SRCROOT)atmos_param/vert_diff_driver/vert_diff_driver.F90 $(SRCROOT)atmos_param/topo_drag/null/topo_drag.F90 $(SRCROOT)atmos_param/diag_cloud_rad/null/diag_cloud_rad.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/lengthscaleeq.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_ch3i.F90 $(SRCROOT)atmos_shared/vert_advection/vert_advection.F90 $(SRCROOT)atmos_fv_dynamics/tools/pv_module.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_face.F90 $(SRCROOT)atmos_param/sea_esf_rad/rad_utilities.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/potentialml.F90 $(SRCROOT)ice_sis/mask.F90 $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_interfaces.h $(SRCROOT)ecda/shared/eakf_sup/rand_no.F90 $(SRCROOT)atmos_param/damping_driver/damping_driver.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_dynamics.F90 $(SRCROOT)ida/eakf_mtv_ida_dn1.f90 $(SRCROOT)atmos_fv_dynamics/model/fv_point.inc $(SRCROOT)mom4p1/ocean_param/mixing/ocean_convect.F90 $(SRCROOT)atmos_shared/atmos_nudge/atmos_nudge.F90 $(SRCROOT)mom4p1/ocean_core/ocean_obc.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_age_tracer.F90 $(SRCROOT)atmos_shared/interpolator/interpolator.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_eta.F90 $(SRCROOT)atmos_param/fsrad/null/rdparm.F90 $(SRCROOT)atmos_fv_dynamics/tools/fv_diagnostics.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_sea_salt.F90 $(SRCROOT)atmos_param/sea_esf_rad/strat_clouds_W.F90 $(SRCROOT)atmos_param/lscale_cond/null/lscale_cond.F90 $(SRCROOT)atmos_param/fsrad/null/rad_diag.F90 $(SRCROOT)mom4p1/ocean_core/ocean_thickness.F90 $(SRCROOT)mom4p1/ocean_core/ocean_bbc.F90 $(SRCROOT)atmos_fv_dynamics/tools/par_vecsum.F90 $(SRCROOT)atmos_fv_dynamics/tools/upper.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_drifters.F90 $(SRCROOT)atmos_param/sea_esf_rad/sealw99.F90 $(SRCROOT)atmos_param/mg_drag/mg_drag.F90 $(SRCROOT)atmos_fv_dynamics/model/dyn_core.F90 $(SRCROOT)atmos_param/stable_bl_turb/stable_bl_turb.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_usrrxt.F90 $(SRCROOT)ida/obs/obs_eakf_ida_up.F90 $(SRCROOT)mom4p1/ocean_core/ocean_grids.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_fluxes.F90 $(SRCROOT)ecda/shared/eakf_sup/eakf_tab.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_po4_pre.F90 $(SRCROOT)atmos_param/diffusivity/null/diffusivity.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/lagrange.F90 $(SRCROOT)atmos_param/my25_turb/null/my25_turb.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_integrand.F90 $(SRCROOT)atmos_param/rh_clouds/null/rh_clouds.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_csiro.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_sw_driver.F90 $(SRCROOT)ecda/shared/eakf_sup/cov_cutoff.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/q2over2eq.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/original_fms_rad.F90 $(SRCROOT)atmos_param/entrain/entrain.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_velocity_diag.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_TOPAZ.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_photo.F90 $(SRCROOT)mom4p1/ocean_core/ocean_coriolis.F90 $(SRCROOT)atmos_param/moist_processes/moist_processes.F90 $(SRCROOT)mom4p1/ocean_core/ocean_workspace.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/dissipationeq.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_form_drag.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_tables.F90 $(SRCROOT)atmos_fv_dynamics/model/tracer_2d.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_meta.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_clouds.F90 $(SRCROOT)ada/obs/obs_eakf_atm.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/tridiagonal_gotm.F90 $(SRCROOT)atmos_fv_dynamics/model/ecmfft.F90 $(SRCROOT)atmos_fv_dynamics/tools/set_eta.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/standalone_clouds.F90 $(SRCROOT)atmos_param/sea_esf_rad/rad_output_file.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer_advect.F90 $(SRCROOT)atmos_fv_dynamics/tools/getmax.F90 $(SRCROOT)mom4p1/ocean_core/ocean_memory.h $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkealgebraic.F90 $(SRCROOT)atmos_param/cloud_rad/cloud_rad.F90 $(SRCROOT)mom4p1/ocean_core/oda_driver.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_velocity.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/strat_chem_utilities.F90 $(SRCROOT)mom4p1/ocean_core/ocean_advection_velocity.F90 $(SRCROOT)atmos_fv_dynamics/driver/coupled/atmosphere.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_b.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_co2.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_eta.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_swtbls.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_velocity.F90 $(SRCROOT)atmos_param/fsrad/null/co2int.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_jpl.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/algebraiclength.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_imp_slv.F90 $(SRCROOT)ocean_shared/generic_tracers/FMS_ocmip2_co2calc.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfate.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_gfdl.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setinv.F90 $(SRCROOT)atmos_fv_dynamics/tools/timingModule.F90 $(SRCROOT)atmos_param/sea_esf_rad/isccp_clouds.F90 $(SRCROOT)ice_sis/ice_type.F90 $(SRCROOT)atmos_fv_dynamics/tools/mod_comm.F90 $(SRCROOT)atmos_param/sea_esf_rad/radiative_gases.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_residency_range.F90 $(SRCROOT)atmos_param/shallow_conv/null/shallow_conv.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_utilities.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_lw.F90 $(SRCROOT)atmos_param/lin_cloud_microphys/lin_cloud_microphys.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_exp_slv.F90 $(SRCROOT)ada/heEnKF_ada_driver_fv.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/rh_based_clouds.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_arrays.h $(SRCROOT)atmos_param/moist_processes/moist_processes_utils.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_convection_tracer.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_sponges_tracer.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_increment_tracer.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_chen.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihcst_friction.F90 $(SRCROOT)mom4p1/ocean_core/ocean_pressure.F90 $(SRCROOT)mom4p1/ocean_core/ocean_util.F90 $(SRCROOT)atmos_fv_dynamics/tools/init_sw_ic.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_co2calc.F90 $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_diagnostics.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp_mom4p0.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_bgc_restore.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/r_ratio.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/m_tracname.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_soa.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_cpsi3.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_momentum_source.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_frazil.F90 $(SRCROOT)atmos_param/betts_miller/bm_omp.F90 $(SRCROOT)atmos_param/dry_adj/null/dry_adj.F90 $(SRCROOT)ida/obs/obs_eakf_ida_dn.F90 $(SRCROOT)atmos_param/cosp/null/cosp_driver.F90 $(SRCROOT)ada/ada_core.F90 $(SRCROOT)atmos_param/donner_deep/null/donner_deep.F90 $(SRCROOT)ice_param/ocean_albedo.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/diff_center.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/util.F90 $(SRCROOT)atmos_param/clouds/null/clouds.F90 $(SRCROOT)mom4p1/ocean_core/ocean_sbc.F90 $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act_k.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/time.F90 $(SRCROOT)mom4p1/ocean_core/ocean_barotropic.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_polar_filter.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/tropchem_driver.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_friction.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysics_util.F90 $(SRCROOT)ocean_shared/generic_tracers/FMS_coupler_util.F90 $(SRCROOT)mom4p1/ocean_core/ocean_topog.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/tkeeq.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kbalgebraic.F90 $(SRCROOT)atmos_fv_dynamics/model/fill_module.F90 $(SRCROOT)atmos_param/betts_miller/betts_miller.F90 $(SRCROOT)ice_sis/rot.F90 $(SRCROOT)atmos_coupled/atmos_model.F90 $(SRCROOT)ida/ida_driver.F90 $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov_kernel.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_radon.F90 $(SRCROOT)atmos_fv_dynamics/driver/coupled/fv_physics.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_rf.F90 $(SRCROOT)atmos_param/sea_esf_rad/cloud_spec.F90 $(SRCROOT)mom4p1/ocean_core/ocean_velocity.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/gridinterpol.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/ode_solvers.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lap_friction.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_sulfur_hex.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/donner_deep_clouds_W.F90 $(SRCROOT)atmos_fv_dynamics/model/fv_pack.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_diagnostics.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/genericeq.F90 $(SRCROOT)ecda/shared/bgrid/bgrid_horiz.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/bulkphys_rad.F90 $(SRCROOT)atmos_param/sea_esf_rad/lw_gases_stdtf.F90 $(SRCROOT)atmos_param/sea_esf_rad/microphys_cloud.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_dust.F90 $(SRCROOT)atmos_param/monin_obukhov/monin_obukhov.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_submesoscale.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_read_sim_chm.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_hook.F90 $(SRCROOT)atmos_param/fsrad/null/longwave.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/variances.F90 $(SRCROOT)atmos_fv_dynamics/model/sw_core.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_rodas_slv.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave_jerlov.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bih_tracer.F90 $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_ccn_act.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/gotm_lib_version.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_CFC.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsB.F90 $(SRCROOT)atmos_fv_dynamics/model/update_fv_phys.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mods.F90 $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_driver.F90 $(SRCROOT)atmos_param/cg_drag/null/cg_drag.F90 $(SRCROOT)ecda/shared/eakf_sup/obs_tools.F90 $(SRCROOT)ice_sis/ice_model.F90 $(SRCROOT)atmos_param/fsrad/null/shortwave.F90 $(SRCROOT)atmos_param/fsrad/null/mcm_swnew.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_pp.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tpm_util.F90 $(SRCROOT)atmos_param/cloud_generator/null/cloud_generator.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_he.F90 $(SRCROOT)atmos_param/sea_esf_rad/cloudrad_package.F90 $(SRCROOT)atmos_param/shallow_cu/null/uw_conv.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_kpp.F90 $(SRCROOT)atmos_shared/tracer_driver/aer_ccn_act/aer_in_act.F90 $(SRCROOT)atmos_param/edt/null/edt.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsC.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_gotm.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.mat.F90 $(SRCROOT)atmos_param/sea_esf_rad/radiation_diag.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/fk_craig.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_carbon_aerosol.F90 $(SRCROOT)oda/model/heEnKF_model_oda.F90 $(SRCROOT)atmos_fv_dynamics/tools/fv_restart.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapgen_friction.F90 $(SRCROOT)atmos_param/sea_esf_rad/gas_tf.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_biotic.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/lhsw_driver.F90 $(SRCROOT)atmos_param/cloud_generator/null/betaDistribution.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_mix.F90 $(SRCROOT)atmos_fv_dynamics/tools/gmean.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/moz.subs.F90 $(SRCROOT)atmos_shared/tracer_driver/stratchem/strat_chem_model.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_bihgen_friction.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/ispralength.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_params.F90 $(SRCROOT)atmos_fv_dynamics/tools/pmaxmin.F90 $(SRCROOT)ice_sis/ice_spec.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_shortwave.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/include/version.h $(SRCROOT)mom4p1/ocean_tracers/ocean_tempsalt.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_sigma_transport.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/uw_clouds_W.F90 $(SRCROOT)atmos_param/sea_esf_rad/microphys_rad.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/compute_rist.F90 $(SRCROOT)mom4p1/ocean_core/ocean_domains.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/kpp.F90 $(SRCROOT)ice_sis/ice_thm.F90 $(SRCROOT)ada/eakf_ada.F90 $(SRCROOT)atmos_param/vert_turb_driver/vert_turb_driver.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/alpha_mnb.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/epsbalgebraic.F90 $(SRCROOT)atmos_param/fsrad/null/hconst.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_rivermix.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_tracer.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_ibgc.F90 $(SRCROOT)mom4p1/ocean_core/ocean_model.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_tidal.F90 $(SRCROOT)mom4p1/ocean_diag/ocean_tracer_util.F90 $(SRCROOT)atmos_param/grey_radiation/grey_radiation.F90 $(SRCROOT)ocean_shared/generic_tracers/generic_tracer_utils.F90 $(SRCROOT)oda/heEnKF_hea_eakf_oda.F90 $(SRCROOT)atmos_fv_dynamics/tools/init_dry_atm.F90 $(SRCROOT)atmos_param/fsrad/null/fsrad.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_mixdownslope.F90 $(SRCROOT)atmos_param/sea_esf_rad/esfsw_parameters.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_abiotic.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_overflow.F90 $(SRCROOT)ada/model/model_ada.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_overexchange.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_vert_const.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/turbulence.F90 $(SRCROOT)atmos_param/sea_esf_rad/shortwave_driver.F90 $(SRCROOT)atmos_param/cloud_zonal/null/cloud_zonal.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/util/eqstate.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_a.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_xlandmix.F90 $(SRCROOT)atmos_param/sea_esf_rad/zetac_clouds_W.F90 $(SRCROOT)atmos_param/radiation_driver/radiation_driver.F90 $(SRCROOT)ida/ida_core.F90 $(SRCROOT)atmos_param/sea_esf_rad/longwave_driver.F90 $(SRCROOT)atmos_param/sea_esf_rad/ozone.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_setsox.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_c.F90 $(SRCROOT)ecda/shared/eakf_sup/assim_tools.F90 $(SRCROOT)ecda/shared/bgrid/bgrid_vert.F90 $(SRCROOT)mom4p1/ocean_bgc/ocmip2_cfc.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_generic_tracer.F90 $(SRCROOT)mom4p1/ocean_bgc/ocean_pert_co2.F90 $(SRCROOT)oda/obs/obs_eakf_ocn.F90 $(SRCROOT)atmos_param/physics_driver/physics_driver.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chem_utls.F90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_ma.F90 $(SRCROOT)atmos_param/fsrad/null/co2_data.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_lapcst_friction.F90 $(SRCROOT)atmos_fv_dynamics/model/pft_module.F90 $(SRCROOT)ida/eakf_mtv_ida_up.f90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/internal_wave.F90 $(SRCROOT)ida/model/model_ida_dn1.f90 $(SRCROOT)mom4p1/ocean_param/gotm-4.0/turbulence/cmue_sg.F90 $(SRCROOT)ida/ida_types.F90 $(SRCROOT)mom4p1/ocean_core/ocean_parameters.F90 $(SRCROOT)ecda/shared/eakf_sup/loc_and_dist.F90 $(SRCROOT)atmos_shared/tracer_driver/atmos_tracer_driver.F90 $(SRCROOT)mom4p1/ocean_param/sources/ocean_time_filter.F90 $(SRCROOT)atmos_param/betts_miller/bm_massflux.F90 $(SRCROOT)mom4p1/ocean_param/mixing/ocean_nphysicsA.F90 $(SRCROOT)oda/heEnKF_oda_driver_ecda.F90 $(SRCROOT)atmos_param/sea_esf_rad/aerosolrad_package.F90 $(SRCROOT)mom4p1/ocean_tracers/transport_matrix.F90 $(SRCROOT)atmos_param/sea_esf_rad/sea_esf_rad.F90 $(SRCROOT)mom4p1/ocean_tracers/ocean_tracer.F90 $(SRCROOT)atmos_param/strat_cloud/strat_cloud.F90 $(SRCROOT)ada/ada_types.F90 $(SRCROOT)mom4p1/ocean_core/ocean_types.F90 $(SRCROOT)atmos_param/sea_esf_rad/null/mgrp_prscr_clds.F90 $(SRCROOT)atmos_shared/tracer_driver/tropchem/mo_chemdr.F90
+clean: neat
+	-rm -f .libecda.a.cppdefs $(OBJ) libecda.a
+
+neat:
+	-rm -f $(TMPFILES)
+
+localize: $(OFF)
+	cp $(OFF) .
+
+TAGS: $(SRC)
+	etags $(SRC)
+
+tags: $(SRC)
+	ctags $(SRC)
+
+libecda.a: $(OBJ)
+	$(AR) $(ARFLAGS) libecda.a $(OBJ)
+

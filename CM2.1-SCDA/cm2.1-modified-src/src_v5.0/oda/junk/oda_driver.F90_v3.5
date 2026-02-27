@@ -1,0 +1,1482 @@
+#include<fms_platform.h>
+
+module oda_driver_mod
+  !
+  ! This is the top-level module for ocean data assimilation.
+  !
+
+  ! FMS shared modules
+  use fms_mod, only : read_data, write_data, file_exist
+  use fms_mod, only : open_namelist_file, close_file, check_nml_error
+  use fms_mod, only : error_mesg, FATAL
+  use mpp_mod, only : mpp_npes, stdout, stdlog, mpp_pe, mpp_declare_pelist
+  use mpp_mod, only : mpp_sync_self, mpp_sum, mpp_set_current_pelist, mpp_root_pe, mpp_set_stack_size, mpp_broadcast
+  use mpp_domains_mod, only : domain2d, mpp_update_domains, mpp_define_domains, mpp_global_field
+  use mpp_domains_mod, only : CYCLIC_GLOBAL_DOMAIN, BGRID_NE, FOLD_NORTH_EDGE
+  use mpp_domains_mod, only : mpp_get_compute_domain, mpp_get_data_domain, null_domain2d
+  use mpp_domains_mod, only : mpp_redistribute, mpp_broadcast_domain, mpp_update_domains
+  use diag_manager_mod, only : register_diag_field, diag_axis_init, send_data
+  use ensemble_manager_mod, only : get_ensemble_id, get_ensemble_size, get_ensemble_pelist
+  use time_manager_mod, only : time_type, decrement_time, increment_time, get_time
+  use constants_mod, only : radius, epsln
+
+  ! ODA Modules
+  use oda_types_mod, only : grid_type, ocean_profile_type, field_type, da_flux_type, obs_clim_type
+  use oda_core_mod, only : oda_core_init, get_obs, get_obs_sst, get_obs_suv
+  use oda_core_mod, only : get_obs_eta, get_obs_woa05t, get_obs_woa05s, ocn_obs, ssh_td
+  use eakf_oda_mod, only : ensemble_filter, ensemble_filter_sfc
+  use eakf_ida_dn_mod, only : ensemble_filter_sice_dn
+
+  ! MOM Modules
+  use ocean_types_mod
+  use ocean_grids_mod, only : set_ocean_grid_size, set_ocean_hgrid_arrays, set_ocean_vgrid_arrays
+  use ocean_topog_mod, only : ocean_topog_init
+  use ocean_convect_mod, only : convection
+  use ocean_domains_mod, only : set_ocean_domain, get_local_indices
+
+  ! IDA Modules
+  use ida_types_mod, only: ida_grid_type, ida_field_type, sice_obs_type
+  use ida_core_mod, only : ida_core_init, get_sice_obs_dn, put_sice_obs_dn
+
+  ! Ice modules
+  use ice_type_mod, only: ice_data_type, hlim
+  use ice_grid_mod, only: Domain, im, jm, km, xb1d, yb1d
+
+  implicit none
+  
+  private
+
+  integer, parameter :: NO_ASSIM = 0, OI=1, EAKF=2
+  integer, parameter :: MAX_ENSEMBLE_SIZE = 24
+
+  !::sdu:: These should probably be in a shared module
+  integer, parameter :: MAX_PROFILES = 120000
+  integer, parameter :: MAX_SICE_OBS = 50000
+
+  integer :: filter_halo_x = 1, filter_halo_y = 1
+
+  integer :: asm_method = NO_ASSIM
+  character(len=8) :: assim_method = 'NO_ASSIM'
+
+  type(grid_type), target :: T_grid
+  type(domain2d), pointer  :: Asm_domain => NULL()
+  type(ocean_prog_tracer_type), allocatable, save :: T_prog0(:)
+  type(ocean_velocity_type), target :: Velocity0
+  type(ocean_prog_tracer_type), allocatable, save :: T_progi(:)
+  type(ocean_velocity_type), target :: Velocityi
+
+  integer :: isc, iec, jsc, jec, isd, ied, jsd, jed
+
+  integer :: isc_i, iec_i, jsc_i, jec_i, isd_i, ied_i, jsd_i, jed_i
+
+  integer :: ni, nj, nk, nk_sice
+  integer :: num_prog_tracers
+  integer :: assim_prog_tracers ! snz
+  integer :: assim_layout(2) ! snz
+  integer :: start_da
+  character(len=64) :: fname ! snz
+
+  real, dimension(:,:,:), allocatable, save :: corr_t, corr_s, corr_u, corr_v
+  real, dimension(:,:), allocatable, save :: corr_tx, corr_ty, corr_eta
+  real, dimension(:,:), allocatable, save :: corr_tf, corr_qf
+  real, dimension(:,:), allocatable, save :: corr_lw, corr_sw
+
+!!$  real, dimension(:,:,:), allocatable, save :: corr_ti, corr_ui, corr_vi, corr_si
+!!$  real, dimension(:,:,:), allocatable, save :: corr_t1, corr_t2
+!!$  real, dimension(:,:), allocatable, save :: corr_iu, corr_iv
+
+  real, dimension(:,:,:), allocatable, save :: eta_t_10d
+  real, dimension(:,:), allocatable, save :: eta_t, eta_td
+
+  integer :: nk_asm
+!!$ Not used
+!!$  integer :: xhalo, yhalo
+  integer :: index_temp, index_salt
+
+  integer :: id_corr_t = -1
+  integer :: id_corr_s = -1
+  integer :: id_corr_u = -1
+  integer :: id_corr_v = -1
+  integer :: id_corr_tx = -1
+  integer :: id_corr_ty = -1
+  integer :: id_corr_tf = -1
+  integer :: id_corr_qf = -1
+  integer :: id_corr_lw = -1
+  integer :: id_corr_sw = -1
+  integer :: id_corr_eta = -1
+  integer :: id_eta_td = -1
+  
+  integer :: id_corr_t_id = -1
+  integer :: id_corr_s_id = -1
+  integer :: id_corr_u_id = -1
+  integer :: id_corr_v_id = -1
+  integer :: id_corr_t1 = -1
+  integer :: id_corr_t2 = -1
+  integer :: id_corr_ui = -1
+  integer :: id_corr_vi = -1
+
+  integer :: pe_start(MAX_ENSEMBLE_SIZE)=0, pe_end(MAX_ENSEMBLE_SIZE)=0
+  integer :: ensemble_size = 1
+  integer :: atmos_npes_pm=1, ocean_npes_pm = 1 ! snz
+!!$  integer :: npes_ocean ! snz for Send_domain
+  logical, dimension(MAX_ENSEMBLE_SIZE) :: ensemble_pe = .false.
+  integer, allocatable, dimension(:,:) :: ensemble_pelist
+!!$  integer, allocatable, dimension(:,:) :: Atm_pelist_pm, Ocn_pelist_pm ! snz
+!!$  integer, allocatable, dimension(:) :: Ocn_pelist ! snz
+  integer :: pe, npes, npes_pm, ensemble_id, ens_siz(4)
+  logical :: sequential_filter = .false.
+  logical :: ida_dn = .false.
+  
+  integer :: isd_filt, ied_filt, jsd_filt, jed_filt
+  integer :: isc_filt, iec_filt, jsc_filt, jec_filt
+  
+  real :: diff_t, dt_const
+  real :: covar_cutoff = 0.0
+  real :: beta_eta_dt = 0.0, beta_eta = 0.0
+  real :: sst_filtering_lat = 90.0, sigma_t = 1.0
+  real :: assim_start_lat = -90.0, assim_end_lat = 90.0
+  integer :: assim_frequency = 24
+
+  type(ocean_domain_type), pointer :: Dom
+  type(ocean_grid_type), pointer :: Grd
+
+  type(ocean_profile_type) :: Profiles(max_profiles)
+!!$  type(sice_obs_type) :: sice_obs_dn(max_sice_obs)
+
+  type(domain2d), private, save :: Filter_domain
+  type(domain2d), dimension(MAX_ENSEMBLE_SIZE), private, save :: Send_domain, Send_domain_i
+  type(field_type), dimension(MAX_ENSEMBLE_SIZE) :: temp_ens_tau, salt_ens_tau
+  type(field_type), dimension(MAX_ENSEMBLE_SIZE) :: u_ens_tau, v_ens_tau
+  type(field_type), dimension(MAX_ENSEMBLE_SIZE) :: uflx_ens, vflx_ens, eta_ens
+  type(field_type), dimension(MAX_ENSEMBLE_SIZE) :: tflx_ens, qflx_ens
+  type(field_type), dimension(MAX_ENSEMBLE_SIZE) :: lwflx_ens, swflx_ens
+
+!!$  type(ida_field_type) :: ti_ens_tau(MAX_ENSEMBLE_SIZE), &
+!!$                          si_ens_tau(MAX_ENSEMBLE_SIZE)
+!!$  type(ida_field_type) :: ui_ens_tau(MAX_ENSEMBLE_SIZE), &
+!!$                          vi_ens_tau(MAX_ENSEMBLE_SIZE)
+!!$  type(ida_field_type) :: ui_ens_ice(MAX_ENSEMBLE_SIZE), &
+!!$                          vi_ens_ice(MAX_ENSEMBLE_SIZE), &
+!!$                          cn_ens_ice(MAX_ENSEMBLE_SIZE), &
+!!$                          im_ens_ice(MAX_ENSEMBLE_SIZE), &
+!!$                          t1_ens_ice(MAX_ENSEMBLE_SIZE), &
+!!$                          t2_ens_ice(MAX_ENSEMBLE_SIZE)
+!!$
+!!$  type(ice_data_type) :: Ice0
+!!$  real, allocatable, dimension(:,:) :: ice_mask
+  logical :: ida_flag = .false.
+
+!!$  private :: get_halo_size
+
+  real, dimension(:), allocatable :: zt, lon_g, lat_g ! snz
+
+  type(obs_clim_type) :: sst_climo
+
+  public :: init_oda, oda, oda_end, put_ida_data, get_ida_data, write_eta_t_td
+
+contains  
+
+  subroutine init_oda(Ocn_time, sis_layout, Domain_ocn, Grid, T_prog)
+    ! initialize First_guess and Analysis grid and domain information
+    ! grids are identical to ocean_model grid.  Halo size may differ.
+    type(ocean_time_type), intent(in), target :: Ocn_Time
+    integer, dimension(2), intent(in) :: sis_layout !< snz ida
+    type(ocean_domain_type), intent(inout), target :: Domain_ocn
+    type(ocean_grid_type), intent(in), target :: Grid !< domain and grid information for ocean model
+    type(ocean_prog_tracer_type), dimension(:), intent(in) :: T_prog
+
+    integer :: n, m, k, i, j, id_day
+    integer :: ioun, io_status, ierr
+    integer :: stdout_unit
+    logical :: use_ssh_as_obs
+
+    type(time_type), pointer :: Time
+    type(time_type)  :: time_s, time_e !< snz tries to add the time period to limit prfs num.
+
+!!$ Not used
+!!$    integer, dimension(2) :: halo, layout
+!!$    integer, dimension(4) :: ens_size
+!!$    integer :: len, xhalo, yhalo
+
+!!$    integer, dimension(2) :: axt, axv, axtv, axvt
+!!$    integer, dimension(3) :: axt2, axh2
+!!$    
+!!$    !::SDU:: These don't seem to really be needed!
+!!$    integer :: id_xv, id_yv, id_xb, id_yb, id_xt, id_yt, id_ct, id_ch
+
+!-----------------------------------------------------------------------
+    
+    stdout_unit = stdout()
+
+    namelist /oda_nml / assim_method, assim_layout, assim_prog_tracers,&
+         & assim_start_lat, assim_end_lat, nk_asm, nk_sice, covar_cutoff, assim_frequency,&
+         & beta_eta_dt, beta_eta, sequential_filter, ida_dn, filter_halo_x, filter_halo_y,&
+         & sst_filtering_lat, sigma_t
+
+    use_ssh_as_obs = ocn_obs%use_ssh_as_obs
+
+    Dom => Domain_ocn
+    Grd => Grid
+
+    num_prog_tracers = size(T_prog)
+
+    allocate(T_prog0(num_prog_tracers), T_progi(num_prog_tracers))
+
+#ifndef MOM4_STATIC_ARRAYS
+    call get_local_indices(Dom, isd, ied, jsd, jed, isc, iec, jsc, jec)
+    nk = Grd%nk
+    do n=1, num_prog_tracers
+       allocate(T_prog0(n)%field(isd:ied,jsd:jed,nk,3)) 
+       allocate(T_prog0(n)%th_tendency(isd:ied,jsd:jed,nk))
+       allocate(T_prog0(n)%tendency(isd:ied,jsd:jed,nk))
+       allocate(T_prog0(n)%source(isd:ied,jsd:jed,nk))
+       allocate(T_prog0(n)%eta_smooth(isd:ied,jsd:jed))
+       allocate(T_prog0(n)%pbot_smooth(isd:ied,jsd:jed))
+       allocate(T_prog0(n)%wrk1(isd:ied,jsd:jed,nk))
+       allocate(T_prog0(n)%tmask_limit(isd:ied,jsd:jed,nk))
+       allocate(T_prog0(n)%K33_implicit(isd:ied,jsd:jed,nk))
+    end do
+    allocate(Velocity0%u(isd:ied,jsd:jed,nk,2,3) )
+    allocate(Velocity0%smf(isd:ied,jsd:jed,2) )
+    allocate(Velocity0%bmf(isd:ied,jsd:jed,2) )
+    allocate(Velocity0%gamma(isd:ied,jsd:jed) )
+    allocate(Velocity0%rossby_radius(isd:ied,jsd:jed) )
+    allocate(Velocity0%press_force(isd:ied,jsd:jed,nk,2) )
+    allocate(Velocity0%accel(isd:ied,jsd:jed,nk,2) )
+    allocate(Velocity0%vfrict_impl(isd:ied,jsd:jed,nk,2) )
+    allocate(Velocity0%source(isd:ied,jsd:jed,nk,2) )
+    allocate(Velocity0%wrkv(isd:ied,jsd:jed,nk,2) )
+    allocate(Velocity0%advection(isd:ied,jsd:jed,nk,2,3) )
+    allocate(Velocity0%lap_friction_bt(isd:ied,jsd:jed,2) )
+    allocate(Velocity0%bih_friction_bt(isd:ied,jsd:jed,2) )
+#endif
+
+    index_temp = -1; index_salt = -1
+
+    do n=1, num_prog_tracers
+       if ( T_prog(n)%name == 'temp' ) index_temp = n
+       if ( T_prog(n)%name == 'salt' ) index_salt = n
+    end do
+
+    Dom => Domain_ocn
+    Grd => Grid
+
+    Time => Ocn_Time%model_time
+
+    ! snz tries to add the time period to limit prfs num.
+    time_s = decrement_time(Ocn_Time%model_time, 0, 6)
+    time_e = increment_time(Ocn_Time%model_time, 0, 36)
+
+    ioun = open_namelist_file()
+    read(ioun,nml=oda_nml, iostat=io_status)
+    ierr = check_nml_error(io_status,'oda_nml')
+    call close_file(ioun)
+
+    if ( nk_asm > Grid%nk ) nk_asm = Grid%nk
+    if ( nk_asm < 2 ) then 
+       call error_mesg('oda_driver_mod::init_oda', 'need to specify number of vertical levels for assimilation', FATAL)
+    end if
+
+    ni = Grid%ni
+    nj = Grid%nj
+    nk = Grid%nk
+
+    call mpp_get_compute_domain(Domain_ocn%domain2d, isc, iec, jsc, jec)
+    call mpp_get_data_domain(Domain_ocn%domain2d, isd, ied, jsd, jed)
+
+    T_grid%ni = ni
+    T_grid%nj = nj
+    T_grid%nk = nk
+    
+    allocate(T_grid%x(ni,nj), T_grid%y(ni,nj), T_grid%mask(ni,nj,nk))
+    allocate(T_grid%z(nk))
+
+    allocate(corr_t(isd:ied,jsd:jed,nk), corr_s(isd:ied,jsd:jed,nk))       
+    allocate(corr_u(isd:ied,jsd:jed,nk), corr_v(isd:ied,jsd:jed,nk))       
+    allocate(corr_tx(isd:ied,jsd:jed), corr_ty(isd:ied,jsd:jed), corr_eta(isd:ied,jsd:jed))       
+    allocate(corr_tf(isd:ied,jsd:jed), corr_qf(isd:ied,jsd:jed))       
+    allocate(corr_lw(isd:ied,jsd:jed), corr_sw(isd:ied,jsd:jed))       
+    allocate(eta_td(isd:ied,jsd:jed))
+    eta_td(:,:) = 0.0
+
+!!$    allocate(corr_ti(isd:ied,jsd:jed,nk), corr_si(isd:ied,jsd:jed,nk))
+!!$    allocate(corr_ui(isd:ied,jsd:jed,nk), corr_vi(isd:ied,jsd:jed,nk))
+
+    corr_t(:,:,:) = 0.0
+    corr_s(:,:,:) = 0.0
+    corr_u(:,:,:) = 0.0
+    corr_v(:,:,:) = 0.0
+    corr_tx(:,:) = 0.0
+    corr_ty(:,:) = 0.0
+    corr_tf(:,:) = 0.0
+    corr_qf(:,:) = 0.0
+    corr_lw(:,:) = 0.0
+    corr_sw(:,:) = 0.0
+    corr_eta(:,:) = 0.0
+
+!!$    corr_ti(:,:,:) = 0.0
+!!$    corr_si(:,:,:) = 0.0
+!!$    corr_ui(:,:,:) = 0.0
+!!$    corr_vi(:,:,:) = 0.0
+
+    allocate(eta_t(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff))
+    eta_t(:,:) = 0.0
+
+!!$    call mpp_get_compute_domain(Domain, isc_i, iec_i, jsc_i, jec_i)
+!!$    call mpp_get_data_domain(Domain, isd_i, ied_i, jsd_i, jed_i)
+
+!!$    allocate(corr_t1(isd_i:ied_i,jsd_i:jed_i,1:km-1), corr_t2(isd_i:ied_i,jsd_i:jed_i,1:km-1))
+!!$    allocate(corr_iu(isd_i:ied_i,jsd_i:jed_i), corr_iv(isd_i:ied_i,jsd_i:jed_i))
+!!$    corr_t1(:,:,:) = 0.0
+!!$    corr_t2(:,:,:) = 0.0
+!!$    corr_iu(:,:) = 0.0
+!!$    corr_iv(:,:) = 0.0
+
+!!$    allocate(ice_mask(isd_i:ied_i,jsd_i:jed_i))
+!!$    ice_mask(isd_i:ied_i,jsd_i:jed_i) = 0.0
+!!$    allocate(Ice0%mask(isc_i:iec_i,jsc_i:jec_i))
+!!$    allocate(Ice0%part_size(isd_i:ied_i,jsd_i:jed_i,1:1))
+!!$    allocate(Ice0%t_ice1(isd_i:ied_i,jsd_i:jed_i,2:km))
+!!$    allocate(Ice0%t_ice2(isd_i:ied_i,jsd_i:jed_i,2:km))
+!!$    allocate(Ice0%u_ice(isd_i:ied_i,jsd_i:jed_i))
+!!$    allocate(Ice0%v_ice(isd_i:ied_i,jsd_i:jed_i))
+
+    ! get global grid information from ocean_model
+    call mpp_global_field(Domain_ocn%domain2d, Grid%xt, T_grid%x)
+    call mpp_global_field(Domain_ocn%domain2d, Grid%yt, T_grid%y)
+    call mpp_global_field(Domain_ocn%domain2d, Grid%tmask(:,:,:), T_grid%mask)
+
+    T_grid%z = Grid%zt
+
+!!$ snz add the following few lines to get the grid information for his own
+!!$ purpose
+
+       allocate(lon_g(ni), lat_g(nj), zt(nk))
+       lon_g(:) = T_grid%x(:, nj/2)
+       lat_g(:) = T_grid%y(ni/2, :)
+       zt = Grid%zt
+!!$
+
+    do j=1, nj
+       do i=1, ni
+          if ( T_grid%y(i,j) < assim_start_lat .or. T_grid%y(i,j) > assim_end_lat ) then
+             T_grid%mask(i,j,:) = 0.0
+          end if
+          do k=nk_asm+1, nk
+             T_grid%mask(i,j,k) = 0.0
+          end do
+       end do
+    end do
+
+    if (assim_frequency < 1) then
+       call error_mesg('oda_driver_mod::init_oda', 'invalid assim frequency', FATAL)
+    else
+       ensemble_id = get_ensemble_id()
+       ens_siz = get_ensemble_size()
+       ensemble_size = ens_siz(1)
+       npes_pm = ens_siz(2)
+       allocate(ensemble_pelist(1:ensemble_size,1:npes_pm))
+
+       call get_ensemble_pelist(ensemble_pelist)
+        
+       write (UNIT=stdout_unit,FMT='("Assimilating data every ",I5," timesteps")') assim_frequency
+    end if
+
+
+    select case (assim_method)
+    case ('NO_ASSIM')
+       asm_method = NO_ASSIM
+    case ('EAKF')
+       asm_method = EAKF
+    case ('OI')
+       asm_method = OI
+    end select
+
+    select case (asm_method)
+    case (EAKF)
+       ! snz add the following few lines to get the grid information for his own
+       ! purpose
+!!$       if ( ensemble_size == 1 ) call error_mesg('oda_driver_mod::oda_init', 'number of ens members must be > 1 for EAKF', FATAL)
+       ! allocate ensemble_storage. Use global pelist for filter
+       call mpp_set_current_pelist() ! snz
+!!$       call mpp_set_current_pelist(Ocn_pelist) ! snz
+       
+       call mpp_define_domains((/1,ni,1,nj/), assim_layout, Filter_domain,&
+            & xflags=Domain_ocn%xflags, yflags=Domain_ocn%yflags, xhalo=filter_halo_x,&
+            & yhalo=filter_halo_y, name='filter')
+
+       if ( .NOT. sequential_filter ) then
+          call mpp_get_data_domain(Filter_domain, isd_filt, ied_filt, jsd_filt, jed_filt)
+          call mpp_get_compute_domain(Filter_domain, isc_filt, iec_filt, jsc_filt, jec_filt)       
+       end if
+
+       allocate(sst_climo%sst_obs(isd_filt:ied_filt, jsd_filt:jed_filt))
+       sst_climo%sst_obs(:,:) = 0.0
+
+       do m=1, ensemble_size
+          allocate(temp_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,Grid%nk))
+          allocate(salt_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,Grid%nk))
+          allocate(u_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,Grid%nk))
+          allocate(v_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,Grid%nk))
+          allocate(uflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+          allocate(vflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+
+          allocate(eta_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+
+          allocate(tflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+          allocate(qflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+          allocate(lwflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+          allocate(swflx_ens(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+
+!!$          allocate(ti_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,nk_sice))
+!!$          allocate(si_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,nk_sice))
+!!$          allocate(ui_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,nk_sice))
+!!$          allocate(vi_ens_tau(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,nk_sice))
+       
+!!$          allocate(cn_ens_ice(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+!!$          allocate(ui_ens_ice(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+!!$          allocate(vi_ens_ice(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+!!$          allocate(im_ens_ice(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,1:1))
+!!$          allocate(t1_ens_ice(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,km-1))
+!!$          allocate(t2_ens_ice(m)%data(isd_filt:ied_filt,jsd_filt:jed_filt,km-1))
+       end do
+
+       call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:)) ! snz
+!!$       call mpp_set_current_pelist(Ocn_pelist_pm(ensemble_id,:)) ! snz
+       call mpp_define_domains((/1,ni,1,nj/), Domain_ocn%layout, Send_domain(ensemble_id),&
+            & xflags=Domain_ocn%xflags, yflags=Domain_ocn%yflags, xhalo=Domain_ocn%xhalo,&
+            & yhalo=Domain_ocn%yhalo, name='send')
+!!$       call mpp_define_domains((/1,im,1,jm/), sis_layout, Send_domain_i(ensemble_id),&
+!!$            & xflags=CYCLIC_GLOBAL_DOMAIN, yflags=FOLD_NORTH_EDGE, xhalo = 1, &
+!!$            & yhalo = 1, name='send')
+
+       ! snz tries to add the time period to limit prfs num.
+       call oda_core_init(Domain_ocn%domain2d, T_grid, time_s, time_e, localize=.false.)       
+
+       allocate(eta_t_10d(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:ssh_td))
+       eta_t_10d(:,:,:) = 0.0
+
+       if ( use_ssh_as_obs ) then
+          fname = 'INPUT/eta_t_10d.res'
+          if( file_exist('INPUT/eta_t_10d.res_ens01.nc') ) then
+             start_da = 0
+             do id_day=1, ssh_td
+!!$                call read_data(trim(fname),'eta_t',eta_t_10d(:,:,id_day),&
+!!$                     & domain=Domain_ocn%domain2d,timelevel=id_day,append_pelist_name=.true.)
+           end do
+         else
+           start_da = 1
+         end if
+       end if
+    end select
+
+!!$    id_xv = diag_axis_init('zxv', xb1d(2:im+1), 'degrees_E', 'X','longitude', set_name='ice', Domain2=Domain )
+!!$    id_yv = diag_axis_init('zyv', yb1d(2:jm+1), 'degrees_N', 'Y','latitude',  set_name='ice', Domain2=Domain )
+!!$    id_xb = diag_axis_init('zxb', xb1d, 'degrees_E', 'X', 'longitude', set_name='ice', Domain2=Domain )
+!!$    id_yb = diag_axis_init('zyb', yb1d, 'degrees_N', 'Y', 'latitude', set_name='ice', Domain2=Domain )
+!!$    id_xt = diag_axis_init('zxt', (xb1d(1:im)+xb1d(2:im+1))/2, 'degrees_E', 'X', &
+!!$                           'longitude',set_name='ice',edges=id_xb,Domain2=Domain)
+!!$    id_yt = diag_axis_init('zyt', (yb1d(1:jm)+yb1d(2:jm+1))/2, 'degrees_N', 'Y', &
+!!$                           'latitude',set_name='ice', edges=id_yb,Domain2=Domain)
+!!$    id_ch = diag_axis_init('zch', hlim(1:km-1), 'meters','Z', 'thickness')
+!!$    id_ct = diag_axis_init('zct', hlim(1:km-1), 'degree','Z', 'temperature')
+!!$    axv  = (/ id_xv, id_yv       /)
+!!$    axt  = (/ id_xt, id_yt       /)
+!!$    axh2 = (/ id_xt, id_yt, id_ch/)
+!!$    axt2 = (/ id_xt, id_yt, id_ct/)
+!!$    axtv = (/ id_xt, id_yv /); ! for north faces of t-cells
+!!$    axvt = (/ id_xv, id_yt /); ! for east  faces of t-cells
+
+    id_corr_t = register_diag_field('oda', 'amf_temp', Grid%tracer_axes(1:3),&
+         & Time, 'correction for temperature', 'deg_C', missing_value=-9999., range=(/-50.,50./))
+    id_corr_s = register_diag_field('oda', 'amf_salt', Grid%tracer_axes(1:3),&
+         & Time, 'correction for salinity', 'g/kg', missing_value=-9999., range=(/-50.,50./))
+    id_corr_u = register_diag_field('oda', 'amf_u', Grid%vel_axes_uv(1:3),&
+         & Time, 'correction for u', 'm/sec', missing_value=-9999., range=(/-50.,50./))
+    id_corr_v = register_diag_field('oda', 'amf_v', Grid%vel_axes_uv(1:3),&
+         & Time, 'correction for v', 'm/sec', missing_value=-9999., range=(/-50.,50./))
+    id_corr_tx = register_diag_field('oda', 'amf_tx', Grid%vel_axes_flux_x(1:2),&
+         & Time, 'correction for u_flux', 'N/m^2', missing_value=-9999., range=(/-50.,50./))
+    id_corr_ty = register_diag_field('oda', 'amf_ty', Grid%vel_axes_flux_y(1:2),&
+         & Time, 'correction for v_flux', 'N/m^2', missing_value=-9999., range=(/-50.,50./))
+    id_corr_tf = register_diag_field('oda', 'amf_tf', Grid%tracer_axes(1:2),&
+         & Time, 'correction for t_flux', 'Watts/m^2', missing_value=-9999., range=(/-500.,500./))
+    id_corr_qf = register_diag_field('oda', 'amf_qf', Grid%tracer_axes(1:2),&
+         & Time, 'correction for q_flux', 'm/sec', missing_value=-9999., range=(/-500.,500./))
+    id_corr_lw = register_diag_field('oda', 'amf_lw', Grid%tracer_axes(1:2),&
+         & Time, 'correction for lw_flux', 'Watts/m^2', missing_value=-9999., range=(/-500.,500./))
+    id_corr_sw = register_diag_field('oda', 'amf_sw', Grid%tracer_axes(1:2),&
+         & Time, 'correction for salt_flux', 'Watts/m^2', missing_value=-9999., range=(/-500.,500./))
+    id_corr_eta = register_diag_field('oda', 'amf_eta_td', Grid%tracer_axes(1:2),&
+         & Time, 'correction for eta_td', 'meter', missing_value=-9999., range=(/-50.,50./))
+    id_eta_td = register_diag_field('oda', 'eta_td', Grid%tracer_axes(1:2),&
+         & Time, 'eta_t n-day tendency', 'meter', missing_value=-9999., range=(/-50.,50./))
+
+!!$    id_corr_t_id = register_diag_field('oda','amf_t_id',&
+!!$         Grid%tracer_axes(1:3),Time,'correction for temperature','deg_C',&
+!!$         missing_value=-9999.,range=(/-500.,500./))
+!!$    id_corr_s_id = register_diag_field('oda','amf_s_id',&
+!!$         Grid%tracer_axes(1:3),Time,'correction for salinity','g/kg',&
+!!$         missing_value=-9999.,range=(/-500.,500./))
+!!$    id_corr_u_id = register_diag_field('oda','amf_u_id',&
+!!$         Grid%vel_axes_uv(1:3),Time,'correction for u','m/sec',&
+!!$         missing_value=-9999.,range=(/-500.,500./))
+!!$    id_corr_v_id = register_diag_field('oda','amf_v_id',&
+!!$         Grid%vel_axes_uv(1:3),Time,'correction for v','m/sec',&
+!!$         missing_value=-9999.,range=(/-500.,500./))
+!!$
+!!$    id_corr_t1 = register_diag_field('oda','amf_t1', axt2, Time, &
+!!$         'correction for upper layer temp','C', &
+!!$         missing_value=-9999.,range=(/-500.,500./))
+!!$    id_corr_t2 = register_diag_field('oda','amf_t2', axt2, Time, &
+!!$         'correction for lower layer temp','C', &
+!!$         missing_value=-9999.,range=(/-500.,500./))
+!!$    id_corr_ui = register_diag_field('oda','amf_ui', axt, Time, &
+!!$         'correction for UI','m/s', &
+!!$         missing_value=-9999.,range=(/-500.,500./))
+!!$    id_corr_vi = register_diag_field('oda','amf_vi', axt, Time, &
+!!$         'correction for VI','m/s', &
+!!$         missing_value=-9999.,range=(/-500.,500./))
+  end subroutine init_oda
+
+  subroutine oda(Ocn_Time, T_prog, Velocity, flux, Ext_mode)
+    type(ocean_time_type), intent(in) :: Ocn_Time
+    type(ocean_prog_tracer_type), dimension(:), intent(inout) :: T_prog
+    type(ocean_velocity_type), intent(inout) :: Velocity
+    type(da_flux_type), intent(inout) :: flux
+    type(ocean_external_mode_type), intent(inout) :: Ext_mode
+    
+    real :: pre_ptmp, ptmp
+    real :: alpha, beta, alpha0, beta0, alpha1, beta1, lonn, latt ! nudging
+
+    ! snz adds a time-step index as the analysis time-step using time_step
+    integer :: assim_freq_day = 0
+    integer :: m, n, nprof, itt, tau, taup1
+    integer :: second0, day0, ii0, jj0, ii, jj, kk, i, j
+    integer :: no_prf, no_sst, no_eta, no_suv
+    integer :: no_prf_p_sst, no_prf_p_eta, no_prf_p_suv
+    integer :: no_prf_p_sst_p_eta, no_prf_p_sst_p_suv, no_prf_p_eta_p_suv
+    integer :: no_woa05t, no_woa05s
+    integer :: stdout_unit
+!!$    integer :: num_obs_sice_dn
+
+    logical :: assim_time, used
+    logical :: use_prf_as_obs, use_woa05_t, use_woa05_s, use_sst_as_obs, use_ssh_as_obs, use_suv_as_obs
+
+    type(time_type) :: time
+
+    alpha = 1./2.718281828
+    beta = 1. - alpha
+    alpha0 = alpha**30
+    beta0 = 1. - alpha0
+
+    stdout_unit = stdout()
+
+    no_prf = 0
+    no_sst = 0
+    no_eta = 0
+    no_suv = 0
+    
+    itt = Ocn_Time%itt
+    tau = Ocn_Time%tau
+    taup1 = Ocn_Time%taup1
+    use_prf_as_obs = ocn_obs%use_prf_as_obs
+    use_sst_as_obs = ocn_obs%use_sst_as_obs
+    use_ssh_as_obs = ocn_obs%use_ssh_as_obs
+    use_suv_as_obs = ocn_obs%use_suv_as_obs
+    use_woa05_t = ocn_obs%use_woa05_t
+    use_woa05_s = ocn_obs%use_woa05_s
+           
+    T_prog0(1)%field(:,:,:,1) = T_prog(1)%field(:,:,:,taup1)
+    T_prog0(2)%field(:,:,:,1) = T_prog(2)%field(:,:,:,taup1)
+    Velocity0%u(:,:,:,1,1) = Velocity%u(:,:,:,1,taup1)
+    Velocity0%u(:,:,:,2,1) = Velocity%u(:,:,:,2,taup1)
+
+    Ext_mode%deta_dt(:, :) = 0.0
+
+    time = Ocn_Time%model_time
+
+    call get_time(time, second0, day0)
+
+    if ( second0 == 0 .or. second0 == 43200 ) then
+
+       if ( mod(itt-1,assim_frequency) .eq. 0 ) then
+          assim_time = .true.
+          if ( (use_prf_as_obs) .and. (.NOT.use_woa05_t) .and. (.NOT.use_woa05_s) ) then
+             call get_obs(time, Profiles, no_prf)
+          end if
+          if ( (use_prf_as_obs) .and. (use_woa05_t) .and. (.NOT.use_woa05_s) ) then
+             call get_obs(time, Profiles, no_prf)
+             call get_obs_woa05t(time, Profiles, no_woa05t, no_prf)
+             no_prf = no_prf + no_woa05t
+          end if
+          if ( (.NOT.use_prf_as_obs) .and. (use_woa05_t) .and. (use_woa05_s) ) then
+             call get_obs_woa05t(time, Profiles, no_woa05t, no_prf)
+             no_prf = no_prf + no_woa05t
+             call get_obs_woa05s(time, Profiles, no_woa05s, no_prf)
+             no_prf = no_prf + no_woa05s
+          end if
+          if ( (use_prf_as_obs) .and. (use_woa05_t) .and. (use_woa05_s) ) then
+             call get_obs(time, Profiles, no_prf)
+             call get_obs_woa05t(time, Profiles, no_woa05t, no_prf)
+             no_prf = no_prf + no_woa05t
+             call get_obs_woa05s(time, Profiles, no_woa05s, no_prf)
+             no_prf = no_prf + no_woa05s
+          end if
+
+          if ( (use_sst_as_obs) .and. (use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo, Filter_domain)
+             no_prf_p_sst = no_prf + no_sst
+             call get_obs_eta(time, Profiles, no_eta, no_prf_p_sst)
+             no_prf_p_sst_p_eta = no_prf_p_sst + no_eta
+             call get_obs_suv(time, Profiles, no_suv, no_prf_p_sst_p_eta)
+             nprof = no_prf + no_sst + no_eta + no_suv
+          end if
+          if ( (use_sst_as_obs) .and. (use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo, Filter_domain)
+             no_prf_p_sst = no_prf + no_sst
+             call get_obs_eta(time, Profiles, no_eta, no_prf_p_sst)
+             nprof = no_prf + no_sst + no_eta
+          end if
+          if ( (use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo, Filter_domain)
+             no_prf_p_sst = no_prf + no_sst
+             call get_obs_suv(time, Profiles, no_suv, no_prf_p_sst)
+             nprof = no_prf + no_sst + no_suv
+          end if
+          if ( (use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+             call get_obs_sst(time, Profiles, no_sst, no_prf, sst_climo, Filter_domain)
+             nprof = no_prf + no_sst
+          end if
+
+          if ( (.NOT.use_sst_as_obs) .and. (use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_eta(time, Profiles, no_eta, no_prf)
+             no_prf_p_eta = no_prf + no_eta
+             call get_obs_suv(time, Profiles, no_suv, no_prf_p_eta)
+             nprof = no_prf + no_eta + no_suv
+          end if
+          if ( (.NOT.use_sst_as_obs) .and. (use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+             call get_obs_eta(time, Profiles, no_eta, no_prf)
+             nprof = no_prf + no_eta
+          end if
+          if ( (.NOT.use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (use_suv_as_obs) ) then
+             call get_obs_suv(time, Profiles, no_suv, no_prf)
+             nprof = no_prf + no_suv
+          end if
+
+          if ( (.NOT.use_sst_as_obs) .and. (.NOT.use_ssh_as_obs) .and. (.NOT.use_suv_as_obs) ) then
+             nprof = no_prf
+          end if
+
+          if ( mpp_pe() == mpp_root_pe() ) then 
+             write (UNIT=stdout_unit, FMT='("no_suv = ",I9,", no_eta = ",I9,", no_sst = ",I9,", no_prf = ",I9)')&
+                  & no_suv, no_eta, no_sst, no_prf
+          end if
+       else
+          assim_time = .false.
+       end if
+
+       select case ( asm_method )
+       case (EAKF)
+
+          if ( use_ssh_as_obs .and. ssh_td > 1 ) then
+             if ( start_da == 1 ) then
+                if ( assim_freq_day == 0 ) then
+                   eta_t_10d(:,:,1) = Ext_mode%eta_t(:,:,taup1)
+!!$                   eta_t(:,:) = 0.0 ! for td
+                   eta_t(:,:) = eta_t_10d(:,:,1)
+                else if ( assim_freq_day < ssh_td ) then
+                   eta_t_10d(:,:,assim_freq_day+1) = Ext_mode%eta_t(:,:,taup1)
+!!$                   eta_t(:,:) = eta_t_10d(:,:,assim_freq_day+1)-eta_t_10d(:,:,1) ! for td
+                   eta_t(:,:) = 0.0
+                   do n=1, assim_freq_day+1
+                      eta_t(:,:) = eta_t(:,:) + eta_t_10d(:,:,n)
+                   end do
+!!$                   eta_t(:,:) = eta_t(:,:)/assim_freq_day ! stupid
+                   eta_t(:,:) = Ext_mode%eta_t(:,:,taup1)
+                else
+                   do n=1, ssh_td-1
+                      eta_t_10d(:,:,n) = eta_t_10d(:,:,n+1)
+                   end do
+                   eta_t_10d(:,:,ssh_td) = Ext_mode%eta_t(:,:,taup1)
+!!$                   eta_t(:,:) = eta_t_10d(:,:,ssh_td)-eta_t_10d(:,:,1) ! for td
+                   eta_t(:,:) = 0.0
+                   do n=1, ssh_td
+                      eta_t(:,:) = eta_t(:,:) + eta_t_10d(:,:,n)
+                   end do
+                   eta_t(:,:) = eta_t(:,:)/ssh_td
+                end if
+             else
+                do n=1, ssh_td-1
+                   eta_t_10d(:,:,n) = eta_t_10d(:,:,n+1)
+                end do
+                eta_t_10d(:,:,ssh_td) = Ext_mode%eta_t(:,:,taup1)
+!!$                eta_t(:,:) = eta_t_10d(:,:,ssh_td)-eta_t_10d(:,:,1) ! for td
+                eta_t(:,:) = 0.0
+                do n=1, ssh_td
+                   eta_t(:,:) = eta_t(:,:) + eta_t_10d(:,:,n)
+                end do
+                eta_t(:,:) = eta_t(:,:)/ssh_td
+             end if
+          else
+             eta_t(:,:) = Ext_mode%eta_t(:,:,taup1)
+          end if
+
+          corr_t(isd:ied,jsd:jed,1:nk) = T_prog0(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1)
+          corr_s(isd:ied,jsd:jed,1:nk) = T_prog0(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1)
+          corr_u(isd:ied,jsd:jed,1:nk) = Velocity0%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1,1)
+          corr_v(isd:ied,jsd:jed,1:nk) = Velocity0%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,2,1)
+          corr_tx(isd:ied,jsd:jed) = flux%u_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+          corr_ty(isd:ied,jsd:jed) = flux%v_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+          corr_tf(isd:ied,jsd:jed) = flux%t_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+          corr_qf(isd:ied,jsd:jed) = flux%q_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+          corr_lw(isd:ied,jsd:jed) = flux%lw_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+          corr_sw(isd:ied,jsd:jed) = flux%salt_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+
+          corr_eta(isd:ied,jsd:jed) = eta_t(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+          eta_td(isd:ied,jsd:jed) = eta_t(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff)
+        
+          call mpp_set_current_pelist() ! snz
+
+          call mpp_set_stack_size(5000000)
+
+          if ( .NOT.sequential_filter ) then
+             do m=1, ensemble_size
+                call mpp_broadcast_domain(Send_domain(m))
+             end do
+       
+             do m=1, ensemble_size
+                temp_ens_tau(m)%data(:,:,:) = 0.0
+                salt_ens_tau(m)%data(:,:,:) = 0.0
+                u_ens_tau(m)%data(:,:,:) = 0.0
+                v_ens_tau(m)%data(:,:,:) = 0.0
+                uflx_ens(m)%data(:,:,1) = 0.0
+                vflx_ens(m)%data(:,:,1) = 0.0
+                tflx_ens(m)%data(:,:,1) = 0.0
+                qflx_ens(m)%data(:,:,1) = 0.0
+                lwflx_ens(m)%data(:,:,1) = 0.0
+                swflx_ens(m)%data(:,:,1) = 0.0
+                eta_ens(m)%data(:,:,1) = 0.0
+             end do
+
+             do m=1, ensemble_size
+                call mpp_redistribute(Send_domain(m), T_prog0(1)%field(:,:,:,1),&
+                     & Filter_domain, temp_ens_tau(m)%data(:,:,:), complete=.false.)
+                call mpp_redistribute(Send_domain(m), T_prog0(2)%field(:,:,:,1),&
+                     & Filter_domain, salt_ens_tau(m)%data(:,:,:), complete=.false.)
+                call mpp_redistribute(Send_domain(m), Velocity0%u(:,:,:,1,1),&
+                     & Filter_domain, u_ens_tau(m)%data(:,:,:), complete=.false.)
+                call mpp_redistribute(Send_domain(m), Velocity0%u(:,:,:,2,1),&
+                     & Filter_domain, v_ens_tau(m)%data(:,:,:), complete=.true.)
+             end do
+             do m=1, ensemble_size
+                call mpp_redistribute(Send_domain(m), flux%u_flux(:,:),&
+                     & Filter_domain, uflx_ens(m)%data(:,:,1), complete=.false.)
+                call mpp_redistribute(Send_domain(m), flux%v_flux(:,:),&
+                     & Filter_domain, vflx_ens(m)%data(:,:,1), complete=.false.)
+                call mpp_redistribute(Send_domain(m), flux%t_flux(:,:),&
+                     & Filter_domain, tflx_ens(m)%data(:,:,1), complete=.false.)
+                call mpp_redistribute(Send_domain(m), flux%q_flux(:,:),&
+                     & Filter_domain, qflx_ens(m)%data(:,:,1), complete=.false.)
+                call mpp_redistribute(Send_domain(m), flux%lw_flux(:,:),&
+                     & Filter_domain, lwflx_ens(m)%data(:,:,1), complete=.false.)
+                call mpp_redistribute(Send_domain(m), flux%salt_flux(:,:),&
+                     & Filter_domain, swflx_ens(m)%data(:,:,1), complete=.false.)
+                call mpp_redistribute(Send_domain(m), eta_t(:,:),&
+                     & Filter_domain, eta_ens(m)%data(:,:,1), complete=.true.)
+             end do
+
+             T_prog0(1)%field(:,:,:,1) = 0.0
+             T_prog0(2)%field(:,:,:,1) = 0.0
+             Velocity0%u(:,:,:,1,1) = 0.0
+             Velocity0%u(:,:,:,2,1) = 0.0
+             flux%u_flux(:,:) = 0.0
+             flux%v_flux(:,:) = 0.0
+             flux%t_flux(:,:) = 0.0
+             flux%q_flux(:,:) = 0.0
+             flux%lw_flux(:,:) = 0.0
+             flux%salt_flux(:,:) = 0.0
+             eta_t(:,:) = 0.0
+
+             do m=1, ensemble_size
+                call mpp_update_domains(temp_ens_tau(m)%data(:,:,:), Filter_domain)
+                call mpp_update_domains(salt_ens_tau(m)%data(:,:,:), Filter_domain)
+                call mpp_update_domains(u_ens_tau(m)%data(:,:,:), Filter_domain)
+                call mpp_update_domains(v_ens_tau(m)%data(:,:,:), Filter_domain)
+!!$                call mpp_update_domains(u_ens_tau(m)%data(:,:,:),v_ens_tau(m)%data(:,:,:),&
+!!$                     & Filter_domain,gridtype=BGRID_NE)
+                call mpp_update_domains(uflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(vflx_ens(m)%data(:,:,1), Filter_domain)
+!!$                call mpp_update_domains(uflx_ens(m)%data(:,:,1),vflx_ens(m)%data(:,:,1),&
+!!$                     & Filter_domain,gridtype=BGRID_NE)
+                call mpp_update_domains(tflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(qflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(lwflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(swflx_ens(m)%data(:,:,1), Filter_domain)
+
+                call mpp_update_domains(eta_ens(m)%data(:,:,1:1), Filter_domain)
+             end do
+
+             ! convert potential temp to temp. gjh noticed this difference
+             do m=1, ensemble_size
+                do kk=1, nk           
+                   do jj=jsd_filt, jed_filt
+                      do ii=isd_filt, ied_filt
+                         ii0 = ii
+                         jj0 = jj
+                         if ( ii0 <= 0 ) ii0 = ii0 + ni
+                         if ( ii0 > ni ) ii0 = ii0 - ni
+                         if ( jj0 <= 0 ) jj0 = 1
+                         if ( jj0 > nj ) jj0 = nj
+                         call DEPTH_PRESSURE(T_grid%z(kk),T_grid%y(ii0,jj0),pre_ptmp)
+                         ptmp = sw_ptmp(salt_ens_tau(m)%data(ii,jj,kk),temp_ens_tau(m)%data(ii,jj,kk),0.,pre_ptmp)
+                         if ( temp_ens_tau(m)%data(ii,jj,kk) /= 0.0 ) then
+                            temp_ens_tau(m)%data(ii,jj,kk) = ptmp
+                         end if
+                      end do
+                   end do
+                end do
+             end do
+
+             ! do ensemble adjustment here and redistribute back to ensemble members
+             ! snz to run EAKF
+
+             if ( second0 == 0 ) then ! assimilating subsurface data
+
+             call ensemble_filter(temp_ens_tau(1:ensemble_size),&
+                  & salt_ens_tau(1:ensemble_size),&
+                  & u_ens_tau(1:ensemble_size), v_ens_tau(1:ensemble_size),&
+                  & uflx_ens(1:ensemble_size), vflx_ens(1:ensemble_size),&
+                  & tflx_ens(1:ensemble_size), qflx_ens(1:ensemble_size),&
+                  & lwflx_ens(1:ensemble_size), swflx_ens(1:ensemble_size),&
+                  & eta_ens(1:ensemble_size),&
+                  & Profiles, nprof,&
+                  & isc_filt,iec_filt,jsc_filt,jec_filt,&
+                  & filter_halo_x, filter_halo_y,&
+                  & T_grid, assim_freq_day, time)
+
+             else ! assimilating surface data
+
+             call mpp_update_domains(sst_climo%sst_obs(:,:), Filter_domain)
+
+!!$             write (UNIT=stdout_unit,FMT='("in oda ", I8, "before filter_sfc")') second0 
+
+             call ensemble_filter_sfc(temp_ens_tau(1:ensemble_size),&
+                  & salt_ens_tau(1:ensemble_size),&
+                  & u_ens_tau(1:ensemble_size), v_ens_tau(1:ensemble_size),&
+                  & uflx_ens(1:ensemble_size), vflx_ens(1:ensemble_size),&
+                  & tflx_ens(1:ensemble_size), qflx_ens(1:ensemble_size),&
+                  & lwflx_ens(1:ensemble_size), swflx_ens(1:ensemble_size),&
+                  & eta_ens(1:ensemble_size), sst_climo, &
+                  & isc_filt,iec_filt,jsc_filt,jec_filt, &
+                  & filter_halo_x, filter_halo_y, T_grid, time)
+
+             end if ! finishing filtering
+            
+             ! convert temp to potential temp            
+             do m=1, ensemble_size
+                do kk=1, nk
+                   do jj=jsd_filt, jed_filt
+                      do ii=isd_filt, ied_filt
+                         ii0 = ii
+                         jj0 = jj
+                         if ( ii0 <= 0 ) ii0 = ii0 + ni
+                         if ( ii0 > ni ) ii0 = ii0 - ni
+                         if ( jj0 <= 0 ) jj0 = 1
+                         if ( jj0 > nj ) jj0 = nj
+                         call DEPTH_PRESSURE(T_grid%z(kk),T_grid%y(ii0,jj0),pre_ptmp)
+                         ptmp = sw_ptmp(salt_ens_tau(m)%data(ii,jj,kk),temp_ens_tau(m)%data(ii,jj,kk),pre_ptmp,0.) 
+                         if ( temp_ens_tau(m)%data(ii,jj,kk) /= 0.0 ) then
+                            temp_ens_tau(m)%data(ii,jj,kk) = ptmp
+                         end if
+                      end do
+                   end do
+                end do
+             end do
+
+             do m=1, ensemble_size
+                call mpp_update_domains(temp_ens_tau(m)%data(:,:,:), Filter_domain)
+                call mpp_update_domains(salt_ens_tau(m)%data(:,:,:), Filter_domain)
+                call mpp_update_domains(u_ens_tau(m)%data(:,:,:), Filter_domain)
+                call mpp_update_domains(v_ens_tau(m)%data(:,:,:), Filter_domain)
+!!$                call mpp_update_domains(u_ens_tau(m)%data(:,:,:),v_ens_tau(m)%data(:,:,:),&
+!!$                     & Filter_domain,gridtype=BGRID_NE)
+                call mpp_update_domains(uflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(vflx_ens(m)%data(:,:,1), Filter_domain)
+!!$                call mpp_update_domains(uflx_ens(m)%data(:,:,1),vflx_ens(m)%data(:,:,1),&
+!!$                     & Filter_domain,gridtype=BGRID_NE)
+                call mpp_update_domains(tflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(qflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(lwflx_ens(m)%data(:,:,1), Filter_domain)
+                call mpp_update_domains(swflx_ens(m)%data(:,:,1), Filter_domain)
+
+                call mpp_update_domains(eta_ens(m)%data(:,:,1), Filter_domain)
+             end do
+       
+             do m=1, ensemble_size
+                call mpp_redistribute(Filter_domain, temp_ens_tau(m)%data(:,:,:),&
+                     & Send_domain(m), T_prog0(1)%field(:,:,:,1), complete=.false.)
+                call mpp_redistribute(Filter_domain, salt_ens_tau(m)%data(:,:,:),&
+                     & Send_domain(m), T_prog0(2)%field(:,:,:,1), complete=.false.)
+                call mpp_redistribute(Filter_domain, u_ens_tau(m)%data(:,:,:),&
+                     & Send_domain(m), Velocity0%u(:,:,:,1,1), complete=.false.)
+                call mpp_redistribute(Filter_domain, v_ens_tau(m)%data(:,:,:),&
+                     & Send_domain(m), Velocity0%u(:,:,:,2,1), complete=.true.)
+             end do
+             do m=1, ensemble_size
+                call mpp_redistribute(Filter_domain, uflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%u_flux(:,:), complete=.false.)
+                call mpp_redistribute(Filter_domain, vflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%v_flux(:,:), complete=.false.)
+                call mpp_redistribute(Filter_domain, tflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%t_flux(:,:), complete=.false.)
+                call mpp_redistribute(Filter_domain, qflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%q_flux(:,:), complete=.false.)
+                call mpp_redistribute(Filter_domain, lwflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%lw_flux(:,:), complete=.false.)
+                call mpp_redistribute(Filter_domain, swflx_ens(m)%data(:,:,1),&
+                     & Send_domain(m), flux%salt_flux(:,:), complete=.false.)
+                call mpp_redistribute(Filter_domain, eta_ens(m)%data(:,:,1),&
+                     & Send_domain(m), eta_t(:,:), complete=.true.)
+             end do
+
+!!$             if ( ida_dn ) then
+!!$                corr_ti(isd:ied,jsd:jed,1:nk_sice) =&
+!!$                     & T_prog0(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,1)
+!!$                corr_si(isd:ied,jsd:jed,1:nk_sice) =&
+!!$                     & T_prog0(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,1)
+!!$                corr_ui(isd:ied,jsd:jed,1:nk_sice) =&
+!!$                     & Velocity0%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,1,1)
+!!$                corr_vi(isd:ied,jsd:jed,1:nk_sice) =&
+!!$                     & Velocity0%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,2,1)
+!!$
+!!$                corr_t1(isd_i:ied_i,jsd_i:jed_i,1:km-1) = Ice0%t_ice1(isd_i:ied_i,jsd_i:jed_i,2:km)    
+!!$                corr_t2(isd_i:ied_i,jsd_i:jed_i,1:km-1) = Ice0%t_ice2(isd_i:ied_i,jsd_i:jed_i,2:km)
+!!$                corr_iu(isd_i:ied_i,jsd_i:jed_i) = Ice0%u_ice(isd_i:ied_i,jsd_i:jed_i)
+!!$                corr_iv(isd_i:ied_i,jsd_i:jed_i) = Ice0%v_ice(isd_i:ied_i,jsd_i:jed_i)
+!!$
+!!$                do m=1, ensemble_size
+!!$                   ui_ens_tau(m)%data(:,:,1:nk_sice) = u_ens_tau(m)%data(:,:,1:nk_sice)
+!!$                   vi_ens_tau(m)%data(:,:,1:nk_sice) = v_ens_tau(m)%data(:,:,1:nk_sice)
+!!$                   ti_ens_tau(m)%data(:,:,1:nk_sice) = temp_ens_tau(m)%data(:,:,1:nk_sice)
+!!$                   si_ens_tau(m)%data(:,:,1:nk_sice) = salt_ens_tau(m)%data(:,:,1:nk_sice)
+!!$                end do
+!!$
+!!$                Ice0%t_ice1(isd_i:ied_i,jsd_i:jed_i,2:km) = 0.0
+!!$                Ice0%t_ice2(isd_i:ied_i,jsd_i:jed_i,2:km) = 0.0
+!!$                Ice0%u_ice(isd_i:ied_i,jsd_i:jed_i) = 0.0
+!!$                Ice0%v_ice(isd_i:ied_i,jsd_i:jed_i) = 0.0
+!!$
+!!$                call get_sice_obs_dn(time, ensemble_size, sice_obs_dn, num_obs_sice_dn)
+!!$                call ensemble_filter_sice_dn(ui_ens_tau(1:ensemble_size),&
+!!$                     & vi_ens_tau(1:ensemble_size), ti_ens_tau(1:ensemble_size),&
+!!$                     & si_ens_tau(1:ensemble_size), cn_ens_ice(1:ensemble_size),&
+!!$                     & ui_ens_ice(1:ensemble_size), vi_ens_ice(1:ensemble_size),&
+!!$                     & im_ens_ice(1:ensemble_size),&
+!!$                     & t1_ens_ice(1:ensemble_size), t2_ens_ice(1:ensemble_size),&
+!!$                     & sice_obs_dn, num_obs_sice_dn,&
+!!$                     & isc_filt,iec_filt,jsc_filt,jec_filt,&
+!!$                     & filter_halo_x, filter_halo_y, nk_sice, km-1,&
+!!$                     & T_grid, assim_freq_day, time)
+!!$   
+!!$                ida_flag = .true.
+!!$
+!!$                call put_sice_obs_dn(sice_obs_dn, num_obs_sice_dn)
+!!$
+!!$                do m=1, ensemble_size
+!!$                   call mpp_update_domains(ui_ens_tau(m)%data(:,:,1:nk_sice), Filter_domain)
+!!$                   call mpp_update_domains(vi_ens_tau(m)%data(:,:,1:nk_sice), Filter_domain)
+!!$                   call mpp_update_domains(ti_ens_tau(m)%data(:,:,1:nk_sice), Filter_domain)
+!!$                   call mpp_update_domains(si_ens_tau(m)%data(:,:,1:nk_sice), Filter_domain)
+!!$                   call mpp_update_domains(t1_ens_ice(m)%data(:,:,1:km-1), Filter_domain)
+!!$                   call mpp_update_domains(t2_ens_ice(m)%data(:,:,1:km-1), Filter_domain)
+!!$                   call mpp_update_domains(ui_ens_ice(m)%data(:,:,1:1), Filter_domain)
+!!$                   call mpp_update_domains(vi_ens_ice(m)%data(:,:,1:1), Filter_domain)
+!!$                end do
+!!$
+!!$                do m=1, ensemble_size
+!!$                   call mpp_redistribute(Filter_domain, ti_ens_tau(m)%data(:,:,:),&
+!!$                        & Send_domain(m), T_progi(1)%field(:,:,1:nk_sice,1))
+!!$                   call mpp_redistribute(Filter_domain, si_ens_tau(m)%data(:,:,:),&
+!!$                        & Send_domain(m), T_progi(2)%field(:,:,1:nk_sice,1))
+!!$                   call mpp_redistribute(Filter_domain, ui_ens_tau(m)%data(:,:,:),&
+!!$                        & Send_domain(m), Velocityi%u(:,:,1:nk_sice,1,1))
+!!$                   call mpp_redistribute(Filter_domain, vi_ens_tau(m)%data(:,:,:),&
+!!$                        & Send_domain(m), Velocityi%u(:,:,1:nk_sice,2,1))
+!!$
+!!$                   call mpp_redistribute(Filter_domain, t1_ens_ice(m)%data(:,:,1:km-1),&
+!!$                        & Send_domain_i(m), Ice0%t_ice1(:,:,2:km))
+!!$                   call mpp_redistribute(Filter_domain, t2_ens_ice(m)%data(:,:,1:km-1),&
+!!$                        & Send_domain_i(m), Ice0%t_ice2(:,:,2:km))
+!!$                   call mpp_redistribute(Filter_domain, ui_ens_ice(m)%data(:,:,1),&
+!!$                        & Send_domain_i(m), Ice0%u_ice(:,:))
+!!$                   call mpp_redistribute(Filter_domain, vi_ens_ice(m)%data(:,:,1),&
+!!$                        & Send_domain_i(m), Ice0%v_ice(:,:))
+!!$                end do
+!!$             end if
+        end if ! finish analysis process
+
+        call mpp_sync_self()
+        call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
+
+        corr_t(isd:ied,jsd:jed,1:nk) =&
+             & T_prog0(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1) - corr_t(isd:ied,jsd:jed,1:nk)
+        corr_s(isd:ied,jsd:jed,1:nk) =&
+             & T_prog0(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1) - corr_s(isd:ied,jsd:jed,1:nk)
+        corr_u(isd:ied,jsd:jed,1:nk) =&
+             & Velocity0%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1,1) - corr_u(isd:ied,jsd:jed,1:nk)
+        corr_v(isd:ied,jsd:jed,1:nk) =&
+             & Velocity0%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,2,1) - corr_v(isd:ied,jsd:jed,1:nk)
+        corr_tx(isd:ied,jsd:jed) =&
+             & flux%u_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_tx(isd:ied,jsd:jed)
+        corr_ty(isd:ied,jsd:jed) =&
+             & flux%v_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_ty(isd:ied,jsd:jed)
+        corr_tf(isd:ied,jsd:jed) =&
+             & flux%t_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_tf(isd:ied,jsd:jed)
+        corr_qf(isd:ied,jsd:jed) =&
+             & flux%q_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_qf(isd:ied,jsd:jed)
+        corr_lw(isd:ied,jsd:jed) =&
+             & flux%lw_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_lw(isd:ied,jsd:jed)
+        corr_sw(isd:ied,jsd:jed) =&
+             & flux%salt_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_sw(isd:ied,jsd:jed)
+        corr_eta(isd:ied,jsd:jed) =&
+             & eta_t(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) - corr_eta(isd:ied,jsd:jed)
+
+!!$        if ( ida_dn ) then
+!!$           call mpp_update_domains(Ice0%t_ice1(isd_i:ied_i,jsd_i:jed_i,2:km), Send_domain_i(ensemble_id))
+!!$           call mpp_update_domains(Ice0%t_ice2(isd_i:ied_i,jsd_i:jed_i,2:km), Send_domain_i(ensemble_id))
+!!$           call mpp_update_domains(Ice0%u_ice(isd_i:ied_i,jsd_i:jed_i), Send_domain_i(ensemble_id))
+!!$           call mpp_update_domains(Ice0%v_ice(isd_i:ied_i,jsd_i:jed_i), Send_domain_i(ensemble_id))
+!!$
+!!$           corr_t1(isd_i:ied_i,jsd_i:jed_i,1:km-1) =&
+!!$                & Ice0%t_ice1(isd_i:ied_i,jsd_i:jed_i,2:km) - corr_t1(isd_i:ied_i,jsd_i:jed_i,1:km-1)
+!!$           corr_t2(isd_i:ied_i,jsd_i:jed_i,1:km-1) = &
+!!$                & Ice0%t_ice2(isd_i:ied_i,jsd_i:jed_i,2:km) - corr_t2(isd_i:ied_i,jsd_i:jed_i,1:km-1)
+!!$           corr_iu(isd_i:ied_i,jsd_i:jed_i) = &
+!!$                & Ice0%u_ice(isd_i:ied_i,jsd_i:jed_i) - corr_iu(isd_i:ied_i,jsd_i:jed_i)
+!!$           corr_iv(isd_i:ied_i,jsd_i:jed_i) = &
+!!$                & Ice0%v_ice(isd_i:ied_i,jsd_i:jed_i) - corr_iv(isd_i:ied_i,jsd_i:jed_i)
+!!$
+!!$           corr_ti(isd:ied,jsd:jed,1:nk_sice) = &
+!!$                & T_progi(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,1) - &
+!!$                & corr_ti(isd:ied,jsd:jed,1:nk_sice)
+!!$           corr_si(isd:ied,jsd:jed,1:nk_sice) = &
+!!$                & T_progi(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,1) - &
+!!$                & corr_si(isd:ied,jsd:jed,1:nk_sice)
+!!$           corr_ui(isd:ied,jsd:jed,1:nk_sice) = &
+!!$                & Velocityi%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,1,1) - &
+!!$                & corr_ui(isd:ied,jsd:jed,1:nk_sice)
+!!$           corr_vi(isd:ied,jsd:jed,1:nk_sice) = &
+!!$                & Velocityi%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk_sice,2,1) - &
+!!$                & corr_vi(isd:ied,jsd:jed,1:nk_sice)
+!!$           if ( isc == 1 ) then
+!!$              corr_ti(1,jsd:jed,1:nk_sice) = corr_ti(2,jsd:jed,1:nk_sice)
+!!$           end if
+!!$           if ( iec == ni ) then
+!!$              corr_ti(ni,jsd:jed,1:nk_sice) = corr_ti(ni-1,jsd:jed,1:nk_sice)
+!!$           end if
+!!$
+!!$           call mpp_update_domains(corr_ti(isd:ied,jsd:jed,1:nk_sice), Send_domain(ensemble_id))
+!!$           call mpp_update_domains(corr_si(isd:ied,jsd:jed,1:nk_sice), Send_domain(ensemble_id))
+!!$           call mpp_update_domains(corr_ui(isd:ied,jsd:jed,1:nk_sice), Send_domain(ensemble_id))
+!!$           call mpp_update_domains(corr_vi(isd:ied,jsd:jed,1:nk_sice), Send_domain(ensemble_id))
+!!$
+!!$           call mpp_update_domains(corr_t1(isd_i:ied_i,jsd_i:jed_i,1:km-1), Send_domain_i(ensemble_id))
+!!$           call mpp_update_domains(corr_t2(isd_i:ied_i,jsd_i:jed_i,1:km-1), Send_domain_i(ensemble_id))
+!!$           call mpp_update_domains(corr_iu(isd_i:ied_i,jsd_i:jed_i), Send_domain_i(ensemble_id))
+!!$           call mpp_update_domains(corr_iv(isd_i:ied_i,jsd_i:jed_i), Send_domain_i(ensemble_id))
+!!$           
+!!$           if ( isc == 1 ) then
+!!$              corr_ti(1,jsd:jed,1:nk_sice) = 0.5*(corr_ti(0,jsd:jed,1:nk_sice)+corr_ti(1,jsd:jed,1:nk_sice))
+!!$              corr_ti(2,jsd:jed,1:nk_sice) = 0.5*(corr_ti(1,jsd:jed,1:nk_sice)+corr_ti(2,jsd:jed,1:nk_sice))
+!!$              !corr_ti(3,jsd:jed,1:nk_sice) = 0.5*(corr_ti(2,jsd:jed,1:nk_sice)+corr_ti(3,jsd:jed,1:nk_sice))
+!!$              !corr_ti(4,jsd:jed,1:nk_sice) = 0.5*(corr_ti(3,jsd:jed,1:nk_sice)+corr_ti(4,jsd:jed,1:nk_sice))
+!!$           end if
+!!$           if ( iec == ni ) then
+!!$              corr_ti(ni,jsd:jed,1:nk_sice) = 0.5*(corr_ti(ni+1,jsd:jed,1:nk_sice)+corr_ti(ni,jsd:jed,1:nk_sice))
+!!$              corr_ti(ni-1,jsd:jed,1:nk_sice) = 0.5*(corr_ti(ni,jsd:jed,1:nk_sice)+corr_ti(ni-1,jsd:jed,1:nk_sice))
+!!$              !corr_ti(ni-2,jsd:jed,1:nk_sice) = 0.5*(corr_ti(ni-1,jsd:jed,1:nk_sice)+corr_ti(ni-2,jsd:jed,1:nk_sice))
+!!$              !corr_ti(ni-3,jsd:jed,1:nk_sice) = 0.5*(corr_ti(ni-2,jsd:jed,1:nk_sice)+corr_ti(ni-3,jsd:jed,1:nk_sice))
+!!$           end if
+!!$
+!!$        end if ! for ida_dn
+
+        call mpp_update_domains(corr_t(isd:ied,jsd:jed,1:nk), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_s(isd:ied,jsd:jed,1:nk), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_u(isd:ied,jsd:jed,1:nk), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_v(isd:ied,jsd:jed,1:nk), Send_domain(ensemble_id))
+!!$        call mpp_update_domains(corr_v(isd:ied,jsd:jed,1:nk),corr_v(isd:ied,jsd:jed,1:nk),&
+!!$             & Send_domain(ensemble_id),gridtype=BGRID_NE)
+        call mpp_update_domains(corr_tx(isd:ied,jsd:jed), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_ty(isd:ied,jsd:jed), Send_domain(ensemble_id))
+!!$        call mpp_update_domains(corr_tx(isd:ied,jsd:jed),corr_ty(isd:ied,jsd:jed),&
+!!$             & Send_domain(ensemble_id),gridtype=BGRID_NE)
+        call mpp_update_domains(corr_tf(isd:ied,jsd:jed), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_qf(isd:ied,jsd:jed), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_lw(isd:ied,jsd:jed), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_sw(isd:ied,jsd:jed), Send_domain(ensemble_id))
+        call mpp_update_domains(corr_eta(isd:ied,jsd:jed), Send_domain(ensemble_id))
+        call mpp_update_domains(eta_td(isd:ied,jsd:jed), Send_domain(ensemble_id))
+
+        if ( ssh_td > 1 ) then
+           Ext_mode%deta_dt(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) =&
+                & beta_eta_dt*corr_eta(isd:ied,jsd:jed)/(86400.0*real(ssh_td-1))
+        else
+           Ext_mode%eta_t(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,taup1) =&
+                & beta_eta*corr_eta(isd:ied,jsd:jed) +&
+                & Ext_mode%eta_t(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,taup1)
+        end if
+
+        flux%u_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = corr_tx(isd:ied,jsd:jed)
+        flux%v_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = corr_ty(isd:ied,jsd:jed)
+        flux%t_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = corr_tf(isd:ied,jsd:jed)
+        flux%q_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = corr_qf(isd:ied,jsd:jed)
+        flux%lw_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = corr_lw(isd:ied,jsd:jed)
+        flux%salt_flux(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff) = corr_sw(isd:ied,jsd:jed)
+     end select
+
+     if ( id_corr_t > 0 ) used = send_data(id_corr_t,corr_t(isc:iec,jsc:jec,:),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+     if ( id_corr_s > 0 ) used = send_data(id_corr_s,corr_s(isc:iec,jsc:jec,:),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+     if ( id_corr_u > 0 ) used = send_data(id_corr_u,corr_u(isc:iec,jsc:jec,:),&
+          & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+     if ( id_corr_v > 0 ) used = send_data(id_corr_v,corr_v(isc:iec,jsc:jec,:),&
+          & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+     if ( id_corr_tx > 0 ) used = send_data(id_corr_tx,corr_tx(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+     if ( id_corr_ty > 0 ) used = send_data(id_corr_ty,corr_ty(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+     if ( id_corr_tf > 0 ) used = send_data(id_corr_tf,corr_tf(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+     if ( id_corr_qf > 0 ) used = send_data(id_corr_qf,corr_qf(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+     if ( id_corr_lw > 0 ) used = send_data(id_corr_lw,corr_lw(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+     if ( id_corr_sw > 0 ) used = send_data(id_corr_sw,corr_sw(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+     if ( id_corr_eta > 0 ) used = send_data(id_corr_eta,corr_eta(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+     if ( id_eta_td > 0 ) used = send_data(id_eta_td,eta_td(isc:iec,jsc:jec),&
+          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,1))
+
+!!$     if ( id_corr_t_id > 0 ) used = send_data(id_corr_t_id,corr_ti(isc:iec,jsc:jec,:),&
+!!$          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+!!$     if ( id_corr_s_id > 0 ) used = send_data(id_corr_s_id,corr_si(isc:iec,jsc:jec,:),&
+!!$          & Time,rmask=Grd%tmask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+!!$     if ( id_corr_u_id > 0 ) used = send_data(id_corr_u_id,corr_ui(isc:iec,jsc:jec,:),&
+!!$          & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+!!$     if ( id_corr_v_id > 0 ) used = send_data(id_corr_v_id,corr_vi(isc:iec,jsc:jec,:),&
+!!$          & Time,rmask=Grd%umask(isc-Dom%ioff:iec-Dom%ioff,jsc-Dom%joff:jec-Dom%joff,:))
+
+!!$     if ( id_corr_t1 > 0 ) used = send_data(id_corr_t1,&
+!!$          & corr_t1(isc_i:iec_i,jsc_i:jec_i,:),Time,mask=spread(Ice0%mask,3,km-1))
+!!$     if ( id_corr_t2 > 0 ) used = send_data(id_corr_t2,&
+!!$          & corr_t2(isc_i:iec_i,jsc_i:jec_i,:),Time,mask=spread(Ice0%mask,3,km-1))
+!!$     if ( id_corr_ui > 0 ) used = send_data(id_corr_ui,&
+!!$          & corr_iu(isc_i:iec_i,jsc_i:jec_i),Time,mask=Ice0%mask)
+!!$     if ( id_corr_vi > 0 ) used = send_data(id_corr_vi,&
+!!$          & corr_iv(isc_i:iec_i,jsc_i:jec_i),Time,mask=Ice0%mask)
+
+  end if ! for second0 = 0 or 43200
+
+  if ( second0 < 43200 ) then
+    diff_t = real(second0)/86400.0
+  else
+    diff_t = real(second0-43200)/86400.0
+  end if
+  dt_const = 1./12.*cos(3.1415926/2.*diff_t)
+
+  T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+       & T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+       & dt_const*corr_t(isd:ied,jsd:jed,1:nk)
+  T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+       & T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+       & dt_const*corr_s(isd:ied,jsd:jed,1:nk)
+  Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1,taup1) =&
+       & Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1,taup1) +&
+       & dt_const*corr_u(isd:ied,jsd:jed,1:nk)
+  Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,2,taup1) =&
+       & Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,2,taup1) +&
+       & dt_const*corr_v(isd:ied,jsd:jed,1:nk)
+
+!!$    if ( ida_dn ) then                                                                     
+!!$       T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+!!$            & T_prog(1)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+!!$            & dt_const*corr_ti(isd:ied,jsd:jed,1:nk)
+!!$       T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) =&
+!!$            & T_prog(2)%field(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,taup1) +&
+!!$            & dt_const*corr_si(isd:ied,jsd:jed,1:nk)
+!!$       Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1,taup1) =&
+!!$            & Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,1,taup1) +&
+!!$            & dt_const*corr_ui(isd:ied,jsd:jed,1:nk)
+!!$       Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,2,taup1) =&
+!!$            & Velocity%u(isd-Dom%ioff:ied-Dom%ioff,jsd-Dom%joff:jed-Dom%joff,1:nk,2,taup1) +&
+!!$            & dt_const*corr_vi(isd:ied,jsd:jed,1:nk)
+!!$    end if
+    return
+  end subroutine oda
+
+  subroutine write_eta_t_td()
+
+    integer :: id_day
+    logical :: use_ssh_as_obs
+
+    use_ssh_as_obs = ocn_obs%use_ssh_as_obs
+
+    if ( use_ssh_as_obs .and. ssh_td > 1 ) then
+       fname = 'RESTART/eta_t_10d.res'
+       do id_day=1, ssh_td
+!!$          call write_data(trim(fname),'eta_t',eta_t_10d(:,:,id_day),&
+!!$               & domain=Dom%domain2d,append_pelist_name= .true.)
+       end do
+    end if
+  end subroutine write_eta_t_td
+
+  subroutine DEPTH_PRESSURE(DEPTH, LAT, PRE)
+    ! compute pressure given depth at some latitude
+    ! The UK's National Measurement Laboratory (http://www.npl.co.uk/acoustics/techguides/soundseawater/)
+    !
+    !
+    !     units:
+    !           depth      depth    meter
+    !           pressure   pre      dbar
+    !           latitude   lat     deg
+    !
+    real, intent(in)  :: DEPTH, LAT
+    real, intent(out) :: PRE
+
+    real  :: DEG2RAD, X, AA,BB,CC
+
+    DEG2RAD = atan(1.0)*4.0*abs(LAT)/180.0    ! convert to radians
+    X       = sin(DEG2RAD)    
+    AA      = 9.7803*(1.0+5.3e-3*X*X)
+    BB      = (AA-2.0e-5*DEPTH)/(9.80612-2.0e-5*DEPTH)
+    CC      = (((2.8e-19*DEPTH-1.25e-13)*DEPTH+2.465e-8)*DEPTH+1.00818e-2)*DEPTH
+    PRE     = CC*BB*1.e2
+
+    return
+  end subroutine DEPTH_PRESSURE
+
+  real function sw_ptmp(S, T, P, PR)
+    ! DESCRIPTION:
+    !    Calculates potential temperature as per UNESCO 1983 report.
+    !   
+    ! INPUT:  (all must have same dimensions)
+    !   S  = salinity    [psu      (PSS-78) ]
+    !   T  = temperature [degree C (IPTS-68)]
+    !   P  = pressure    [db]
+    !   PR = Reference pressure  [db]
+    !
+    ! OUTPUT:
+    !   sw_ptmp = Potential temperature relative to PR [degree C (IPTS-68)]
+    !
+    real, intent(in) :: S, T, P, PR
+
+    real :: adtg, del_P, del_th, th, q
+
+    ! theta1
+    adtg=sw_adtg(S, T, P)
+    del_P  = PR - P
+    del_th = del_P*adtg
+    th     = T + 0.5*del_th
+    q      = del_th
+
+    ! theta2
+    adtg=sw_adtg(S,th,P+0.5*del_P)
+    del_th = del_P*adtg
+    th     = th + (1.0 - 1.0/sqrt(2.0))*(del_th - q)
+    q      = (2.0-sqrt(2.0))*del_th + (-2.0+3.0/sqrt(2.0))*q
+
+    ! theta3
+    adtg=sw_adtg(S,th,P+0.5*del_P)
+    del_th = del_P*adtg
+    th     = th + (1.0 + 1.0/sqrt(2.0))*(del_th - q)
+    q      = (2.0 + sqrt(2.0))*del_th + (-2.0-3.0/sqrt(2.0))*q
+
+    ! theta4
+    adtg=sw_adtg(S,th,P+del_P)
+    del_th = del_P*adtg
+
+    sw_ptmp   = th + (del_th - 2.0*q)/6.0
+    return
+  end function sw_ptmp
+
+  real function sw_adtg(S, T, P)
+    ! DESCRIPTION:
+    !    Calculates adiabatic temperature gradient as per UNESCO 1983 routines.
+    ! INPUT:
+    !   S = salinity    [psu      (PSS-78) ]
+    !   T = temperature [degree C (IPTS-68)]
+    !   P = pressure    [db]
+    !
+    ! OUTPUT:
+    !   sw_adtg = adiabatic temperature gradient [degree_C/db]
+    !
+    real, intent(in) :: S, T, P
+
+    real :: adtg, a0, a1, a2, a3, b0, b1, c0, c1, c2, c3, d0, d1, e0, e1, e2
+    a0 =  3.5803E-5
+    a1 = +8.5258E-6
+    a2 = -6.836E-8
+    a3 =  6.6228E-10
+
+    b0 = +1.8932E-6
+    b1 = -4.2393E-8
+
+    c0 = +1.8741E-8
+    c1 = -6.7795E-10
+    c2 = +8.733E-12
+    c3 = -5.4481E-14
+
+    d0 = -1.1351E-10
+    d1 =  2.7759E-12
+
+    e0 = -4.6206E-13
+    e1 = +1.8676E-14
+    e2 = -2.1687E-16
+
+    sw_adtg = a0 + (a1 + (a2 + a3*T)*T)*T +&
+         & (b0 + b1*T)*(S-35) +&
+         & ( (c0 + (c1 + (c2 + c3*T)*T)*T) + (d0 + d1*T)*(S-35) )*P +&
+         & (  e0 + (e1 + e2*T)*T )*P*P
+    return
+  end function sw_adtg
+
+  subroutine put_ida_data(Ice)
+    type(ice_data_type), intent(in)  :: Ice
+
+    integer :: i, j, m, ice_second, ice_day
+
+!!$    call get_time(Ice%time, ice_second, ice_day)
+!!$
+!!$    if ( ice_second .ne. 79200 ) return
+!!$
+!!$    do j=jsc_i, jec_i
+!!$       do i=isc_i, iec_i
+!!$          if ( Ice%mask(i,j) ) ice_mask(i,j) = 1.0
+!!$       end do
+!!$    end do
+!!$    Ice0%mask(isc_i:iec_i,jsc_i:jec_i) = Ice%mask(isc_i:iec_i,jsc_i:jec_i)
+!!$    Ice0%part_size(isd_i:ied_i,jsd_i:jed_i,1:1) = Ice%part_size(isd_i:ied_i,jsd_i:jed_i,1:1)
+!!$    Ice0%t_ice1(isd_i:ied_i,jsd_i:jed_i,2:km) = Ice%t_ice1(isd_i:ied_i,jsd_i:jed_i,2:km)
+!!$    Ice0%t_ice2(isd_i:ied_i,jsd_i:jed_i,2:km) = Ice%t_ice2(isd_i:ied_i,jsd_i:jed_i,2:km)
+!!$    Ice0%u_ice(isd_i:ied_i,jsd_i:jed_i) = Ice%u_ice(isd_i:ied_i,jsd_i:jed_i)
+!!$    Ice0%v_ice(isd_i:ied_i,jsd_i:jed_i) = Ice%v_ice(isd_i:ied_i,jsd_i:jed_i)
+!!$
+!!$    call mpp_update_domains(ice_mask(isd_i:ied_i,jsd_i:jed_i), Send_domain_i(ensemble_id))
+!!$
+!!$    call mpp_set_current_pelist() ! snz
+!!$
+!!$    call mpp_set_stack_size(500000)
+!!$
+!!$    do m=1, ensemble_size
+!!$       call mpp_broadcast_domain(Send_domain_i(m))
+!!$    end do
+!!$       
+!!$    do m=1, ensemble_size
+!!$       cn_ens_ice(m)%data(:,:,1) = 0.0
+!!$       ui_ens_ice(m)%data(:,:,1) = 0.0
+!!$       vi_ens_ice(m)%data(:,:,1) = 0.0
+!!$       im_ens_ice(m)%data(:,:,1) = 0.0
+!!$       t1_ens_ice(m)%data(:,:,:) = 0.0
+!!$       t2_ens_ice(m)%data(:,:,:) = 0.0
+!!$
+!!$       call mpp_redistribute(Send_domain_i(m), Ice0%part_size(:,:,1), Filter_domain, cn_ens_ice(m)%data(:,:,1))
+!!$       call mpp_redistribute(Send_domain_i(m), Ice0%u_ice(:,:), Filter_domain, ui_ens_ice(m)%data(:,:,1))
+!!$       call mpp_redistribute(Send_domain_i(m), Ice0%v_ice(:,:), Filter_domain, vi_ens_ice(m)%data(:,:,1))
+!!$       call mpp_redistribute(Send_domain_i(m), ice_mask(:,:), Filter_domain, im_ens_ice(m)%data(:,:,1))
+!!$
+!!$       call mpp_redistribute(Send_domain_i(m), Ice0%t_ice1(:,:,2:km), Filter_domain, t1_ens_ice(m)%data(:,:,1:km-1))
+!!$       call mpp_redistribute(Send_domain_i(m), Ice0%t_ice2(:,:,2:km), Filter_domain, t2_ens_ice(m)%data(:,:,1:km-1))
+!!$    end do
+!!$
+!!$    do m=1, ensemble_size
+!!$       call mpp_update_domains(cn_ens_ice(m)%data(:,:,1), Filter_domain)
+!!$       call mpp_update_domains(ui_ens_ice(m)%data(:,:,1), Filter_domain)
+!!$       call mpp_update_domains(vi_ens_ice(m)%data(:,:,1), Filter_domain)
+!!$       call mpp_update_domains(im_ens_ice(m)%data(:,:,1), Filter_domain)
+!!$       call mpp_update_domains(t1_ens_ice(m)%data(:,:,:), Filter_domain)
+!!$       call mpp_update_domains(t2_ens_ice(m)%data(:,:,:), Filter_domain)
+!!$    end do
+!!$
+!!$    call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
+
+    return
+  end subroutine put_ida_data
+
+  subroutine get_ida_data(Ice)
+    type(ice_data_type), intent(inout)  :: Ice
+
+    integer :: i, j, k, ice_second, ice_day
+    real :: diff_t, dt_const
+    
+!!$    call get_time(Ice%time, ice_second, ice_day)
+!!$
+!!$    diff_t = real(mod(ice_second,86400))/86400.0
+!!$    dt_const = 1./12.*cos(3.1415926/2.*diff_t)
+!!$
+!!$    if ( .NOT.ida_flag ) return
+!!$
+!!$    do k=2, km
+!!$       do j=jsd_i, jed_i
+!!$          do i=isd_i, ied_i
+!!$             if(Ice%t_ice1(i,j,k) /= 0.0) Ice%t_ice1(i,j,k) = Ice%t_ice1(i,j,k) +&
+!!$                  & dt_const*(Ice0%t_ice1(i,j,k)-Ice%t_ice1(i,j,k))
+!!$             if(Ice%t_ice2(i,j,k) /= 0.0) Ice%t_ice2(i,j,k) = Ice%t_ice2(i,j,k) +&
+!!$                  & dt_const*(Ice0%t_ice2(i,j,k)-Ice%t_ice2(i,j,k))
+!!$          end do
+!!$       end do
+!!$    end do
+!!$
+!!$    do j=jsd_i, jed_i
+!!$       do i=isd_i, ied_i
+!!$          if ( Ice%u_ice(i,j) /= 0.0 ) Ice%u_ice(i,j) = Ice%u_ice(i,j) + dt_const*(Ice0%u_ice(i,j)-Ice%u_ice(i,j))
+!!$          if ( Ice%v_ice(i,j) /= 0.0 ) Ice%v_ice(i,j) = Ice%v_ice(i,j) + dt_const*(Ice0%v_ice(i,j)-Ice%v_ice(i,j))
+!!$       end do
+!!$    end do
+
+    return
+  end subroutine get_ida_data
+
+  subroutine oda_end()
+
+    integer :: m
+
+    deallocate(T_grid%x, T_grid%y, T_grid%z, T_grid%mask)
+
+    deallocate(corr_t, corr_s, corr_u, corr_v, corr_tx, corr_ty, corr_eta)       
+    deallocate(corr_tf, corr_qf, corr_lw, corr_sw, eta_td)       
+
+!!$    deallocate(corr_ti,corr_si,corr_ui,corr_vi,corr_t1,corr_t2,corr_iu,corr_iv)       
+!!$    deallocate(ice_mask,Ice0%mask,Ice0%t_ice1,Ice0%t_ice2,Ice0%part_size,Ice0%u_ice,Ice0%v_ice)
+
+    do m=1, ensemble_size
+       deallocate(temp_ens_tau(m)%data)
+       deallocate(salt_ens_tau(m)%data)
+       deallocate(u_ens_tau(m)%data)
+       deallocate(v_ens_tau(m)%data)
+
+       deallocate(uflx_ens(m)%data)
+       deallocate(vflx_ens(m)%data)
+       deallocate(eta_ens(m)%data)
+       deallocate(tflx_ens(m)%data)
+       deallocate(qflx_ens(m)%data)
+       deallocate(lwflx_ens(m)%data)
+       deallocate(swflx_ens(m)%data)
+
+!!$       deallocate(ti_ens_tau(m)%data)
+!!$       deallocate(si_ens_tau(m)%data)
+!!$       deallocate(ui_ens_tau(m)%data)
+!!$       deallocate(vi_ens_tau(m)%data)
+!!$
+!!$       deallocate(ui_ens_ice(m)%data)
+!!$       deallocate(vi_ens_ice(m)%data)
+!!$       deallocate(cn_ens_ice(m)%data)
+!!$       deallocate(im_ens_ice(m)%data)
+!!$       deallocate(t1_ens_ice(m)%data)
+!!$       deallocate(t2_ens_ice(m)%data)
+    end do
+  end subroutine oda_end
+
+end module oda_driver_mod

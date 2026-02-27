@@ -1,0 +1,48 @@
+# Makefile created by mkmf 2022.01.00
+
+SRCROOT = /home/ouc/zhuxianrui/CM2-f2py/CM2.1-python/src_v5.0/
+
+CPPDEFS = -DMAX_LINKS_=10 -DENABLE_ECDA -Duse_netCDF -Duse_libMPI -DSPMD -DLAND_BND_TRACERS -DUSE_OCEAN_BGC -Duse_shared_pointers -DNI_=360 -DNJ_=200 -DNK_=50 -DNI_LOCAL_=60 -DNJ_LOCAL_=40 -DENABLE_ODA -DENABLE_ADA -DENABLE_IDA -from-rtn1 -to-rtn999
+
+MK_TEMPLATE = /home/ouc/zhuxianrui/CM2-f2py/CM2.1-python/exec/intel.mk
+include $(MK_TEMPLATE)
+
+
+.DEFAULT:
+	-echo $@ does not exist.
+all: libcoupler.a
+cm2_cda_mainsubs.o: $(SRCROOT)coupler/cm2_cda_mainsubs.F90 $(SRCROOT)coupler/mainuse.inc flux_exchange.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c -I$(SRCROOT)coupler	$(SRCROOT)coupler/cm2_cda_mainsubs.F90
+flux_exchange.o: $(SRCROOT)coupler/flux_exchange.F90 surface_flux.o
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)coupler/flux_exchange.F90
+surface_flux.o: $(SRCROOT)coupler/surface_flux.F90
+	$(FC) $(CPPDEFS) $(FPPFLAGS) $(FFLAGS) $(OTHERFLAGS) $(OTHER_FFLAGS) -c	$(SRCROOT)coupler/surface_flux.F90
+./flux_exchange.F90: $(SRCROOT)coupler/flux_exchange.F90
+	cp $(SRCROOT)coupler/flux_exchange.F90 .
+./cm2_cda_mainsubs.F90: $(SRCROOT)coupler/cm2_cda_mainsubs.F90
+	cp $(SRCROOT)coupler/cm2_cda_mainsubs.F90 .
+./mainuse.inc: $(SRCROOT)coupler/mainuse.inc
+	cp $(SRCROOT)coupler/mainuse.inc .
+./surface_flux.F90: $(SRCROOT)coupler/surface_flux.F90
+	cp $(SRCROOT)coupler/surface_flux.F90 .
+SRC = $(SRCROOT)coupler/cm2_cda_mainsubs.F90 $(SRCROOT)coupler/surface_flux.F90 $(SRCROOT)coupler/flux_exchange.F90 $(SRCROOT)coupler/mainuse.inc
+OBJ = cm2_cda_mainsubs.o surface_flux.o flux_exchange.o
+OFF = $(SRCROOT)coupler/flux_exchange.F90 $(SRCROOT)coupler/cm2_cda_mainsubs.F90 $(SRCROOT)coupler/mainuse.inc $(SRCROOT)coupler/surface_flux.F90
+clean: neat
+	-rm -f .libcoupler.a.cppdefs $(OBJ) libcoupler.a
+
+neat:
+	-rm -f $(TMPFILES)
+
+localize: $(OFF)
+	cp $(OFF) .
+
+TAGS: $(SRC)
+	etags $(SRC)
+
+tags: $(SRC)
+	ctags $(SRC)
+
+libcoupler.a: $(OBJ)
+	$(AR) $(ARFLAGS) libcoupler.a $(OBJ)
+

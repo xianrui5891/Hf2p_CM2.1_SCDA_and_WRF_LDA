@@ -1,0 +1,6362 @@
+module eakf_oda_mod !lulv
+
+  ! this module is produced by snz for parallelism of ensemble-based filtering
+  ! data assimilation algorithm, starting from August 9, 2002. A linear 
+  ! regression eakf is used as a primary algorithm to design the parallelism.
+  ! Communications are broadcasting the information at the observation location.
+
+  ! FMS shared modules
+  use fms_mod, only : open_namelist_file, file_exist, check_nml_error, write_version_number, close_file
+  use fms_mod, only : stdout, error_mesg, FATAL, WARNING
+  use fms_io_mod, only: open_file
+  use mpp_mod, only : mpp_sync_self, mpp_set_stack_size, mpp_pe, mpp_npes, mpp_broadcast
+  use mpp_mod, only : mpp_clock_id, mpp_clock_begin, mpp_clock_end, mpp_root_pe
+  use mpp_memutils_mod, only : mpp_print_memuse_stats
+  use oda_types_mod, only : ocean_profile_type, field_type, grid_type, TEMP_ID, SALT_ID, obs_clim_type
+  use time_manager_mod, only : time_type, get_time
+  use constants_mod, only : DEG_TO_RAD, RADIUS
+
+  ! ODA Modules
+  use model_oda_mod, only : init_model, ens_ics, red_ens, get_model_size, ens_ics_stn !lulv add ens_ics_stn
+  use obs_eakf_ocn_mod, only : take_single_obs, obs_init, obs_end, obs_def, get_close_grids
+
+  ! EAKF modules
+  !use eakf_tab_mod, only : rrt
+  use assim_tools_mod, only : assim_tools_init, obs_increment, update_from_obs_inc, obs_increment_prf_eta_hyb, &
+                              obs_increment_prf_eta_hyb_stn !lulv
+  use assim_tools_mod, only : update_from_obs_inc_prf_hyb, update_from_obs_inc_eta_hyb, update_from_inc_bt_hyb
+  use loc_and_dist_mod, only : loc_type, get_dist
+  use cov_cutoff_mod, only : comp_cov_factor
+  use rand_no_mod, only : gau0 ! for adding errors on idealized obs
+  implicit none
+
+  integer, parameter, private :: WOAT_ID = 11
+  integer, parameter, private :: WOAS_ID = 12
+
+  integer, parameter, private :: MAX_PROFILES = 50000 ! must be same as obs
+  integer, parameter, private :: MAX_LEVELS = 200 ! must be same as obs
+
+  logical, save :: first_run_call = .true.
+  logical, save :: module_initialized = .false.
+  logical, save :: module_initialized_tra = .false. !lulv 20210707
+
+  real, allocatable, dimension(:,:) :: ens, ensb, ens_tra !lulv add ensb ens_tra
+  real, allocatable, dimension(:) :: ens_mean, ens_inc, ens_in, ens_out,ens_tmp !lulv add ens_tmp 2020-04-13
+  real, allocatable, dimension(:) :: ens_mean_tra, ens_inc_tra, ens_in_tra, ens_out_tra !lulv 20210707
+  real, allocatable, dimension(:) :: enso_temp, enso_temp_stn, enso_temp_lfq, obs_inc_eakf_temp, obs_inc_oi_temp !lulv add *stn,*lfq
+  real, allocatable, dimension(:) :: enso_temp_tra, obs_inc_eakf_temp_tra, obs_inc_oi_temp_tra !lulv 20210707
+  real, allocatable, dimension(:) :: enso_salt_tra, obs_inc_eakf_salt_tra, obs_inc_oi_salt_tra !lulv 20210707
+  real, allocatable, dimension(:) :: enso_salt, enso_salt_stn, enso_salt_lfq, obs_inc_eakf_salt, obs_inc_oi_salt !lulv add *stn,*lfq
+  real, allocatable, dimension(:) :: enso_temp_hfq, enso_salt_hfq !lulv 20201123
+  real, allocatable, dimension(:) :: enso_temp_hea !lulv 20201127
+  real, allocatable, dimension(:) :: d_g
+  real, allocatable, dimension(:) :: ens_inc_bt_t, ens_inc_bt_s, ens_bt_t, ens_bt_s
+  real, allocatable, dimension(:) :: ens_inc_bt_t_tra, ens_inc_bt_s_tra, ens_bt_t_tra, ens_bt_s_tra !lulv 20210707
+
+!  type(field_type), allocatable, dimension(:) :: corr_t, corr_s
+
+!  public ensemble_filter, ensemble_filter_sfc
+  public ens_stn_filter, ens_lfq_filter, ens_hfq_filter !lulv
+contains
+
+  subroutine ensemble_filter(temp_ens_tau, salt_ens_tau, uflx_ens, vflx_ens, &
+       & Profiles, nprof, isd, ied, jsd, jed, halox, haloy, T_grid, iass, m_time)
+    type(field_type), dimension(:), intent(inout) :: temp_ens_tau, salt_ens_tau
+    type(field_type), dimension(:), intent(inout) :: uflx_ens, vflx_ens
+    type(ocean_profile_type), dimension(:), intent(in) :: Profiles
+    type(grid_type), intent(in) :: T_grid
+    type(time_type), intent(in) :: m_time
+    integer, intent(inout) :: nprof
+    integer, intent(in) :: isd, ied, jsd, jed, halox, haloy
+    integer, intent(inout) :: iass
+
+    !---- namelist with default values
+    real :: cov_inflate = 1.0
+    real :: prf_window = 10.0 ! in days
+    real :: sigma_o_t = 1.0
+    real :: sigma_o_s = 1.0
+    real :: factor_woat = 100.0
+    real :: factor_woab = 25.0
+    real :: cov_factor = 0.0
+    real :: cutoff_v = 10.0
+    real :: std_cut_b = 0.031623
+    real :: std_cut_t = 1.00
+    real :: temp_dist = 1000.0e3
+    real :: salt_dist = 500.0e3
+    real :: txty_dist = 500.0e3
+    real :: prf_hyb_d = 500.0e3
+
+    integer :: max_impact_levels = 7
+    integer :: assim_freq = 1
+    integer :: ass_method = 1 ! 0 for snz-oi, 1 for eakf inv, 2 for eakf multv
+
+    logical :: add_on = .false.
+    logical :: ass_uv = .false.
+    logical :: ass_txty = .false.
+    logical :: salt_to_temp = .false.
+    logical :: temp_to_salt = .false.
+    logical :: debug_eakf = .false.
+    logical :: local_tropatl_box = .false.
+    logical :: local_tropatl_s2t = .false.
+    logical :: global_tropatl_s2t = .false.
+    logical :: global_tropatl_s2s = .false.
+
+    real :: ass_txty_lat_start = -20.0
+    real :: ass_txty_lat_end = 20.0
+    real :: d4ass_txty = 200.0 
+    real :: depth_cut = 500.0
+    real :: e_flder_oer = 2000.0
+    real :: woa_lat = 30.0 ! woa_lat >= 20.0
+    real :: depth_coast = 1000.0
+    real :: obs_inc_sigmat_cut = 2.0
+    real :: obs_inc_sigmas_cut = 1.0
+    real :: tropatl_s2t_latn = 20.0
+    real :: tropatl_s2t_lats = -10.0
+    real :: global_s2t_latn = 20.0
+    real :: global_s2t_lats = -10.0
+
+    namelist /eakf_nml/prf_window,sigma_o_t, sigma_o_s, factor_woat, factor_woab, max_impact_levels, ass_method, &
+         & ass_txty, std_cut_b, std_cut_t, temp_dist, salt_dist, ass_txty_lat_start, ass_txty_lat_end, &
+         & d4ass_txty, txty_dist, depth_cut, e_flder_oer, prf_hyb_d, salt_to_temp, temp_to_salt, &
+         & depth_coast, woa_lat, debug_eakf, obs_inc_sigmat_cut, obs_inc_sigmas_cut, local_tropatl_box, local_tropatl_s2t, &
+         & tropatl_s2t_latn, tropatl_s2t_lats, global_tropatl_s2t, global_tropatl_s2s, global_s2t_latn, global_s2t_lats
+
+    !--- module name and version number ----
+    character(len=*), parameter :: module_name = 'eakf'
+    character(len=*), parameter :: vers_num = 'x00.0'
+
+    !=======================================================================
+    integer :: ass_variable = 1 ! 1 for temperature, 2 for salinity
+    integer :: flag_hyb = 0 ! 0 for hyb scheme, 1 for eakf
+    integer :: ni, nj, nk
+    integer :: stdout_unit
+
+    !=======================================================================
+    integer :: num_prfs_loc_halo
+    integer, dimension(MAX_PROFILES) :: list_loc_halo_prfs
+    integer, dimension(MAX_PROFILES, MAX_LEVELS) :: index_obs
+!!$    integer, dimension(360*200) :: list_close_grids
+    integer, dimension(:), allocatable :: list_close_grids
+
+    !=======================================================================
+    integer :: id_eakf_total
+    integer :: isd_ens, ied_ens, jsd_ens, jed_ens, nprofb, ngrids, nproft
+
+    real :: cutoff_vd, cor_oi, e_flder_aed
+    real :: cov_factor_v, cov_factor_t, cov_factor_h
+
+    integer :: num_close, assim_flag
+    type(loc_type) :: model_loc, obs_loc, model_loc_u
+
+    integer :: ii_ens, jj_ens, kk_ens, nv
+    integer :: ind_temp_h, ind_temp_l, ind_salt_h, ind_salt_l, ind_u, ind_v, ind_eta
+    integer :: i0, i, j, k, k0, kk, num, blk, i_idx
+    integer :: t_tau, s_tau, u_tau, v_tau, i_uflx, i_vflx, i_eta
+    integer :: i_tflx, i_qflx, i_lwflx, i_swflx
+    integer :: idx_obs, idx_buf, idx_k, lji0, npe, npes, kk0, kk1, kk2
+    integer :: lji, model_size, ens_size
+    integer :: unit, ierr, io, pe_curr, j_ens, i_h, i_v0, kk_bot, nk_adj
+    integer :: m_days, m_hours, m_seconds, o_days, o_hours, o_seconds, hours0
+    integer :: i_o, j_o, k_o, i_og, j_og, k_og, j_o0, k_o0, idx_cor
+    integer, dimension(20) :: ind_unit
+    integer :: lcg_size
+
+    !---------------------------------------------------------------------------
+    real :: obs_value, obs_var_t, obs_var_s, obs_var_t_oi, obs_var_s_oi
+    real :: std_oi, std_oi_o, std_oi_g, std_oi_bt_t, std_oi_bt_s, std_c, std_bg
+    real :: dist, dist0
+    real :: v2_h, v2_l, zfcn
+    real :: depth_bot, std_max, obs_inc_sigma
+    real, dimension(50) :: sgm_tgm
+    !---------------------------------------------------------------------------
+    real :: prf_depth, depth_factor, woa_factor, depth_lat
+    integer :: idx_i0, idx_j0, idx_depth
+
+    !---------------------------------------------------------------------------
+    character(len=40) :: file_name
+    character(len=40) :: diag_file
+
+    sgm_tgm = (/.98, .97, .95, .97, .98, 1., 1., 1., .98, .98, .95, .94, .91,&
+         & .86, .83, .80, .77, .75, .72, .72, .69, .67, .66, .64, .61, .58,&
+         & .53, .48, .44, .39, .34, .30, .25, .20, .16, .13, .11, .09, .06,&
+         & .05, .03, .03, .02, .02, .02, .02, .02, .02, .02, .02/)
+
+    stdout_unit = stdout()
+    !---------------------------------------------------------------------------
+    ni = T_grid%ni
+    nj = T_grid%nj
+    nk = T_grid%nk
+
+    std_c = 0.5
+    !---------------------------------------------------------------------------
+    
+    ! Start the clock
+    id_eakf_total = mpp_clock_id('(total eakf computation)')
+    !call mpp_clock_begin(id_eakf_total) !lulv comment
+
+
+!    call mpp_print_memuse_stats('ensemble_filter Before allocate list_close_grids')    
+
+    !---------------------------------------------------------------------------
+    ! Allocate list_close_grids
+    lcg_size = (ied-isd + 2*halox + 1)*(jed-jsd + 2*haloy + 1)
+    allocate(list_close_grids(1:lcg_size), STAT=ierr)
+    if ( ierr /= 0 ) then
+       CALL error_mesg ('eakf_oda_mod::ensemble_filter',&
+            & 'Unable to allocate list_close_grids', FATAL)
+    end if
+
+!    call mpp_print_memuse_stats('ensemble_filter after allocate list_close_grids')    
+
+    isd_ens = isd
+    ied_ens = ied
+    jsd_ens = jsd
+    jed_ens = jed
+
+    ens_size = size(temp_ens_tau)
+    iass = iass + 1
+ 
+    npes = mpp_npes()
+    pe_curr = mpp_pe()
+
+    ! Read namelist for run time control
+    if ( file_exist('input.nml') ) then
+       unit = open_namelist_file()
+       read(unit, nml = eakf_nml, iostat=io)
+       call close_file(unit)
+    else
+       ! Set mystat to an arbitrary positive number if input.nml does not exist.
+       io = 100
+    end if
+
+    if ( check_nml_error(io, 'eakf_nml') < 0 ) then
+       if ( mpp_pe() == mpp_root_pe() ) then
+          call error_mesg('eakf_mod::ensemble_filter', 'EAKF_NML not found in input.nml.  Using defaults.', WARNING)
+       end if
+    end if
+
+    ! Write the namelist to a log file
+    call write_version_number(vers_num, module_name)
+
+    if ( mod(iass,assim_freq) /= 0 ) then
+       deallocate(list_close_grids)
+       return
+    end if
+    ! return ! record for ada_only
+
+    if ( nprof > MAX_PROFILES ) nprof = MAX_PROFILES
+
+    blk = (jed_ens-jsd_ens+2*haloy+1)*(ied_ens-isd_ens+2*halox+1)
+
+    !--------------------------------------------------------------------------
+    call init_model(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, nk, ass_method)
+    model_size = get_model_size()
+
+    ! Begin by initializing the observations
+!    call mpp_print_memuse_stats('ensemble_filter Before obs_init')    
+    call obs_init(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, Profiles, nprof,&
+         & MAX_LEVELS, T_grid, list_loc_halo_prfs, num_prfs_loc_halo)
+
+!    call mpp_print_memuse_stats('ensemble_filter After obs_init')    
+
+    !if ( .not.module_initialized ) then !lulv 20210707
+    if ( .not.module_initialized_tra ) then !lulv 20210707
+       !call eakf_oda_init(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isd, IED=ied, JSD=jsd, JED=jed, NK=nk)
+       call eakf_oda_init_tra(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isd, IED=ied, JSD=jsd, JED=jed, NK=nk)
+    end if
+
+    d_g(:) = T_grid%z(:)
+
+    ! Initialize assim tools module
+    call assim_tools_init()
+
+    ! print namelist
+    if ( pe_curr == mpp_root_pe() .and. first_run_call ) then
+       write (stdout_unit, *) 'model size is ', model_size, 'ensemble size is ', ens_size
+       write (stdout_unit, *) 'prf_window is ', prf_window, 'cov_inflate is ', cov_inflate
+       write (stdout_unit, *) 'temp obs standard derivation is ', sigma_o_t
+       write (stdout_unit, *) 'salt obs standard derivation is ', sigma_o_s
+       write (stdout_unit, *) 'weak woa climate top constraint (k*sigma_o_t) k= ', factor_woat
+       write (stdout_unit, *) 'weak woa climate bot constraint (k*sigma_o_s) k= ', factor_woab
+       write (stdout_unit, *) 'cov_factor is ', cov_factor
+       write (stdout_unit, *) 'MAX_LEVELS is ', MAX_LEVELS
+       write (stdout_unit, *) 'max_impact_levels is ', max_impact_levels
+       write (stdout_unit, *) 'assim_freq is ', assim_freq
+       write (stdout_unit, *) 'ass_method is ', ass_method
+       write (stdout_unit, *) 'no of prfs is ', nprof
+       write (stdout_unit, *) 'std_cut_b is', std_cut_b
+       write (stdout_unit, *) 'std_cut_t is', std_cut_t
+       write (stdout_unit, *) 'ass_txty is', ass_txty
+       write (stdout_unit, *) 'temp_dist, salt_dist are', temp_dist, salt_dist
+       write (stdout_unit, *) 'ass_txty_lat_start, ass_txty_lat_end are', ass_txty_lat_start, ass_txty_lat_end
+       write (stdout_unit, *) 'd4ass_txty is', d4ass_txty
+       write (stdout_unit, *) 'txty_dist is', txty_dist
+       write (stdout_unit, *) 'depth_cut is', depth_cut
+       write (stdout_unit, *) 'e_flder_oer is', e_flder_oer
+       write (stdout_unit, *) 'prf_hyb_d is', prf_hyb_d
+       write (stdout_unit, *) 'temp(salt)_to_salt(temp) is', temp_to_salt, salt_to_temp
+       write (stdout_unit, *) 'depth_coast is',depth_coast,'woa_lat is',woa_lat
+
+       ! nprofb = 0
+       do i=1, nprof
+          if ( Profiles(i)%levels > MAX_LEVELS ) then 
+             write (UNIT=stdout_unit, FMT='("for ",I8,"th prf, levels = ",I8)') i, Profiles(i)%levels
+          end if
+       end do
+    end if
+
+    ! store the temp and salt values in corr_t(s)
+!    do j_ens=1, ens_size
+!       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished eakf initialization")') mpp_pe()
+    end if
+
+    ! Form the ensemble state vector: ens_tra(:, :)
+    call ens_ics(temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens, &
+         & halox, haloy, nk, ens_tra, ass_method) !lulv 20210707
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished ens_ics")') mpp_pe()
+    end if
+
+    ! ###########################################################
+    ! The assimilation main part starts here
+
+    ! Compute the ensemble mean of the initial ensemble before assimilation
+    ens_mean_tra = sum(ens_tra, dim=2) / ens_size
+
+    !go to 1001
+
+    call mpp_sync_self()
+
+    ! Loop through each observation location available at this time
+    index_obs = 0
+    idx_obs = 0
+    do lji=1, num_prfs_loc_halo
+       lji0 = list_loc_halo_prfs(lji)
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+       do kk=1, k0
+          idx_obs = idx_obs + 1
+          index_obs(lji0,kk) = idx_obs
+       end do
+    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished index_obs")') mpp_pe()
+    end if
+
+    obs_var_t_oi = (5.0*sigma_o_t)**2
+    obs_var_s_oi = (5.0*sigma_o_s)**2
+
+    ! Section to do adjustment point by point
+    ! coding for cov_factor
+
+    call get_time(m_time, m_seconds, m_days)
+    m_hours = m_seconds/3600 + m_days * 24
+
+    ngrids = 0
+
+    !===== Eakf assim start =====================================
+    ! for special handling on corrections in vertical direction
+
+    call mpp_sync_self()
+
+!    if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!       print*,'in pe=',mpp_pe(),'num_prfs_loc_halo=', num_prfs_loc_halo,'isc,iec,jsc,jec=',isd_ens, ied_ens, jsd_ens, jed_ens
+!       print*,'in pe=',mpp_pe(),'lon1,lon2=',T_grid%x(isd_ens,jsd_ens),T_grid%x(ied_ens,jed_ens)
+!       print*,'in pe=',mpp_pe(),'lat1,lat2=',T_grid%y(isd_ens,jsd_ens),T_grid%y(ied_ens,jed_ens)
+!    end if
+
+    doloop_9: do lji=1, num_prfs_loc_halo ! (9)
+       lji0 = list_loc_halo_prfs(lji)
+
+       if (Profiles(lji0)%accepted) then ! ifblook prf accepted
+
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+
+! snz add on dec. 17, 2011 to differ the impact radius in coast area
+       idx_i0 = Profiles(lji0)%i_index
+       idx_j0 = Profiles(lji0)%j_index
+       idx_depth = sum(T_grid%mask(idx_i0,idx_j0,:))
+       if (idx_depth <= 0 .or. idx_depth > nk) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+         stop
+       end if
+
+       depth_factor = 1.0
+
+       obs_loc%lat = Profiles(lji0)%lat
+       obs_loc%lon = Profiles(lji0)%lon !lulv 20201123
+       if ((obs_loc%lat < 10.0 .and. obs_loc%lon > 290.0 .and. obs_loc%lon < 335.0) .or. &
+           (obs_loc%lat >= 10.0 .and. obs_loc%lat <= 20.0 .and. obs_loc%lon > 270.0 .and. obs_loc%lon < 335.0) &
+           .or. (obs_loc%lat > 20.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 335.0)) then ! the west of Atlantic
+       prf_depth = d_g(idx_depth)
+       if (abs(Profiles(lji0)%lat) < 20.0) then
+       if (prf_depth > 2.*depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*2.*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/(2.*depth_coast)
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) >= 20.0 .and. abs(Profiles(lji0)%lat) <= 40.0) then
+       if (prf_depth > 1.5*depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*1.5*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/(1.5*depth_coast)
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 40.0 .and. abs(Profiles(lji0)%lat) <= 60.0) then
+       if (prf_depth > depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/depth_coast
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 60.0) then
+         depth_factor = 1.0
+       end if
+       end if ! the west of Atlantic
+       if (depth_factor < 0.0 .or. depth_factor > 1.0) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": depth_factor = ",e12.6)') mpp_pe(), depth_factor
+         stop
+       end if
+       ! end of snz add on dec. 17, 2011 to differ the impact radius in coast area
+
+       call get_time(Profiles(lji0)%time, o_seconds, o_days)
+       o_hours = o_seconds/3600 + o_days * 24
+
+!if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!   print*,'m_hours,o_hours=',m_hours,o_hours
+!end if
+
+       o_hours = abs(o_hours - m_hours)
+
+       i0 = o_hours/24 + 1
+!       if ( i0 > size(rrt) ) then
+!          call error_mesg('eakf_mod::ensemble_filter', 'i0 greater than the size of rrt', FATAL)
+!       end if
+
+!       cov_factor_t = rrt(i0)
+       if (o_hours < prf_window*24) then
+         cov_factor_t = cos(o_hours/(prf_window*24)*0.5*3.1415926)
+       else
+         cov_factor_t = 0.0
+       end if
+
+       if ( cov_factor_t > 0.0 ) then ! control 10d time window (5+ and 5-) 
+          obs_loc%lon = Profiles(lji0)%lon
+          if ( obs_loc%lon < 80.0 ) then ! merge to model setting in oda_core
+             write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+          end if
+          if ( obs_loc%lon > 360.0 ) obs_loc%lon = obs_loc%lon-360.0
+          obs_loc%lat = Profiles(lji0)%lat
+
+          call get_close_grids(obs_loc, isd_ens, ied_ens, jsd_ens, jed_ens, &
+               & halox, haloy, T_grid, list_close_grids, num_close)
+          ngrids = ngrids + num_close
+
+          doloop_8: do k=1, num_close ! (8)
+             j = list_close_grids(k)
+
+             jj_ens = (j-1)/(ied_ens-isd_ens+2*halox+1)+1 + (jsd_ens-1-haloy)
+             ii_ens = mod(j, ied_ens-isd_ens+2*halox+1)
+             if ( ii_ens == 0 ) ii_ens = ied_ens-isd_ens+2*halox+1
+             ii_ens = ii_ens + (isd_ens-1-halox)
+
+             i_h = (jj_ens-jsd_ens+haloy)*(ied_ens-isd_ens+2*halox+1)+ii_ens-isd_ens+halox+1
+
+!             if ( ii_ens <= 0 ) ii_ens = ii_ens + ni
+!             if ( ii_ens > ni ) ii_ens = ii_ens - ni
+!             if ( jj_ens < 1  ) jj_ens = 1
+!             if ( jj_ens > nj ) jj_ens = nj
+             if ( ii_ens < isd_ens-halox .or. ii_ens > ied_ens+halox ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": ii_ens = ",I8)') mpp_pe(), ii_ens
+             end if
+             if ( jj_ens < jsd_ens-haloy .or. jj_ens > jed_ens+haloy ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": jj_ens = ",I8)') mpp_pe() ,jj_ens
+             end if
+
+             model_loc%lon = T_grid%x(ii_ens, jj_ens)
+             model_loc%lat = T_grid%y(ii_ens, jj_ens)
+             model_loc%lon = model_loc%lon+360.0
+             if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+
+             assim_flag = 1
+
+             ! do not do assim over some islands
+             ! East bound
+!!$             if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 278.0 .and. model_loc%lon < 305.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat >= 17.0 .and. model_loc%lat <= 25.0)&
+!!$                  & .and. (model_loc%lon > 262.0 .and. model_loc%lon <= 278.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat > -27.0 .and. model_loc%lat < -18.0)&
+!!$                  & .and. (model_loc%lon > 300.0 .and. model_loc%lon < 330.0) ) assim_flag = 0
+
+             ! do not do assim over some islands
+             ! West bound
+!!$             if ( (model_loc%lat > -15.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 25.0 .and. model_loc%lon < 100.0) ) assim_flag = 0
+
+             if ( assim_flag /= 0 ) then ! (7)
+                assim_flag = 1
+
+                ! for test of estimate uncertainty of analysis !!!!!!!!
+                
+!!$                if ( (obs_loc%lat > -1.0 .and. obs_loc%lat < 1.0) .and.&
+!!$                     & (obs_loc%lon > 139.0 .and. obs_loc%lon < 141.0) ) assim_flag = 0
+
+                ! do not allow obs to have impact on grids separated by continents
+                ! East bound
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 260.0 .and. model_loc%lon < 280.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 240.0 .and. obs_loc%lon < 260.0) ) assim_flag = 0
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 240.0 .and. model_loc%lon < 260.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 280.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon > 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon < 270.0) ) assim_flag = 0
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon < 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon > 270.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon > 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon < 275.0) ) assim_flag = 0
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon < 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon > 275.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 290.0 .and. model_loc%lon < 360.0 ) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 110.0 .and. obs_loc%lon < 290.0) ) assim_flag = 0
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 110.0 .and. model_loc%lon < 290.0) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 290.0 .and. obs_loc%lon < 360.0) ) assim_flag = 0
+
+                ! west bound
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon > 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon > 100.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon > 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon < 77.0) ) assim_flag = 0
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon < 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon > 77.0) ) assim_flag = 0
+
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon > 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon < 110.0) ) assim_flag = 0
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon < 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon > 110.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 145.0 .and. model_loc%lon < 165.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 125.0 .and. obs_loc%lon < 145.0) ) assim_flag = 0
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 125.0 .and. model_loc%lon < 145.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 145.0 .and. obs_loc%lon < 165.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 0.0 .and. obs_loc%lon < 25.0) ) assim_flag = 0
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 0.0 .and. model_loc%lon < 25.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. obs_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+
+                ifblock_6: if ( assim_flag /= 0 ) then ! (6)
+                   dist = get_dist(model_loc, obs_loc)
+                   dist = RADIUS * sqrt(dist)
+
+                   cov_factor = cov_factor_t 
+
+!!$                   ifblock_5: if ( cov_factor > 0.0 ) then ! (5) redundent with cov_factor_t >0 !!
+
+                      ifblock_4_4: if ( Profiles(lji0)%variable == TEMP_ID .or. &
+                           & Profiles(lji0)%variable == SALT_ID .or. &
+                           & Profiles(lji0)%variable == WOAT_ID .or. &
+                           & Profiles(lji0)%variable == WOAS_ID ) then ! T,S -> T,S (4.4)
+                         kk_bot = Profiles(lji0)%k_index(k0)
+                         depth_bot = Profiles(lji0)%depth(k0)
+                         doloop_4: do kk = 1, k0 ! (4)
+                            if ( Profiles(lji0)%flag(kk) ) then ! add each level flag
+                               idx_obs = index_obs(lji0,kk)
+                               if (idx_obs == 0 ) then 
+                                  write (UNIT=stdout_unit, FMT='("lji0 = ",I8)') lji0
+                               end if
+
+                               do j_ens=1, ens_size
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                       & Profiles(lji0)%variable == WOAT_ID ) then
+                                     do i_idx=1, 4
+                                        ind_temp_h = obs_def(idx_obs)%state_var_index(i_idx)
+                                        ind_temp_l = obs_def(idx_obs)%state_var_index(i_idx+4)
+                                        v2_h = v2_h + ens_tra(ind_temp_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv 20210707
+                                        v2_l = v2_l + ens_tra(ind_temp_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv 20210707
+                                     end do
+                                     enso_temp_tra(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                  end if
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                       & Profiles(lji0)%variable == WOAS_ID ) then
+                                     do i_idx=1, 4
+                                        ind_salt_h = obs_def(idx_obs)%state_var_index(i_idx)+nk*blk
+                                        ind_salt_l = obs_def(idx_obs)%state_var_index(i_idx+4)+nk*blk
+                                        v2_h = v2_h + ens_tra(ind_salt_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv 20210707
+                                        v2_l = v2_l + ens_tra(ind_salt_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv 20210707
+                                     end do
+                                     enso_salt_tra(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                  end if
+                               end do
+
+                               if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                    & Profiles(lji0)%variable == WOAT_ID ) then
+                                  if ( Profiles(lji0)%variable == TEMP_ID ) then
+                                     obs_var_t = sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAT_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology                                  
+
+                                    obs_var_t = woa_factor*sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index
+                                  j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_t = obs_var_t * obs_var_t
+                                  obs_var_t_oi = 25.0*obs_var_t
+                                  std_bg = 0.0
+                                  call obs_increment_prf_eta_hyb(enso_temp_tra, ens_size, obs_value, obs_var_t,&
+                                       & obs_inc_eakf_temp_tra, obs_var_t_oi, obs_inc_oi_temp_tra, std_bg)
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_temp_tra(:)*obs_inc_eakf_temp_tra(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmat_cut) then
+                                     obs_inc_eakf_temp_tra(:) = obs_inc_sigmat_cut/obs_inc_sigma*obs_inc_eakf_temp_tra(:)
+                                  end if
+                                  
+!if ((model_loc%lon > 299.0 .and. model_loc%lon < 300.0) .and. (model_loc%lat > 37.0 .and. model_loc%lat < 38.0)) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_temp_tra=',enso_temp_tra,'obs_inc_eakf_temp_tra=',obs_inc_eakf_temp_tra,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+
+                               if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                    & Profiles(lji0)%variable == WOAS_ID ) then
+                                  if (Profiles(lji0)%variable == SALT_ID) then
+                                     obs_var_s = sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAS_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology
+
+                                    obs_var_s = woa_factor*sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index; j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_s = obs_var_s * obs_var_s
+                                  obs_var_s_oi = 25.0*obs_var_s
+                                  std_bg = 0.0
+                                  call obs_increment_prf_eta_hyb(enso_salt_tra, ens_size, obs_value, obs_var_s,&
+                                       & obs_inc_eakf_salt_tra, obs_var_s_oi, obs_inc_oi_salt_tra, std_bg)
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_salt_tra(:)*obs_inc_eakf_salt_tra(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmas_cut) then
+                                     obs_inc_eakf_salt_tra(:) = obs_inc_sigmas_cut/obs_inc_sigma*obs_inc_eakf_salt_tra(:)
+                                  end if
+!if (abs(sum(obs_inc_eakf_salt_tra(:))/ens_size) > 2.0) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_salt_tra=',enso_salt_tra,'obs_inc_eakf_salt_tra=',obs_inc_eakf_salt_tra,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+	  
+                               kk0 = Profiles(lji0)%k_index(kk)
+
+                               if ( kk0 <= 1 ) then
+                                  kk1 = 1
+                                  kk2 = kk1 + max_impact_levels
+                                  cutoff_vd = d_g(2) - d_g(1)
+                               else if ( kk0 < kk_bot ) then
+                                  kk1 = kk0 - max_impact_levels + 1
+                                  kk2 = kk0 + max_impact_levels
+                                  cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                               else ! (for kk0=kk_bot)
+                                  if ( depth_bot <= 500.0 ) then
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     kk2 = kk0 + max_impact_levels
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  else ! (for kk0=kk_bot) .and. (depth_bot > 500.0)
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     if ( (kk0+5*max_impact_levels) <= nk ) then ! extend 10 lvls
+                                        kk2 = kk0 + 4*max_impact_levels
+                                     else
+                                        kk2 = nk
+                                     end if
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  end if
+                               end if
+
+                               std_max = sgm_tgm(1)
+                               do k_o0=2, nk
+                                  if ( std_max < sgm_tgm(k_o0) ) std_max= sgm_tgm(k_o0)
+                               end do
+                               if ( std_max > 0.0 ) sgm_tgm(:) = sgm_tgm(:)/std_max
+
+                               ens_inc_bt_t_tra = 0.0
+                               ens_inc_bt_s_tra = 0.0
+
+                               doloop_3: do kk_ens=kk1, kk2 ! (3)
+                                  t_tau   = (kk_ens-1)*blk + i_h
+                                  s_tau   = nk*blk + t_tau
+
+                                  ifblock_2: if ( ens_mean_tra(t_tau) /= 0.0 ) then ! (2) using ens_mean_tra(t_tau) as mask
+                                     if ( kk_ens <= kk0+max_impact_levels ) then
+                                        cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                             & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                     else ! for deeper than kk_bot+max_impact_levels
+                                        cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                             & d_g(kk0+max_impact_levels)), &
+                                             & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                     end if
+
+                                     cov_factor = cov_factor_v * cov_factor_t
+
+                                     ifblock_1: if ( cov_factor > 0.0 .and. &
+                                          Profiles(lji0)%depth(kk) <= depth_cut ) then ! (1)  
+                                        ifblock_0_60: if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                             & Profiles(lji0)%variable == WOAT_ID ) then ! (0.60)
+                                           ! using temperature adjusts temperature and salinity
+                                           ! temperature itself
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = temp_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = temp_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+
+                    if ( local_tropatl_box ) then
+                       if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                       end if
+                    end if 
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc_tra(:) = 0.0
+
+                                           ifblock_0_60_1: if ( sum(ens_tra(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then !lulv 20210707
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = mpp_pe()*k*kk
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                 call update_from_obs_inc_prf_hyb(enso_temp_tra,&
+                                                      & obs_inc_eakf_temp_tra, obs_inc_oi_temp_tra, ens_tra(t_tau, :),& !lulv 20210707
+                                                      & ens_size, ens_inc_tra, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens_tra(t_tau, :)   = ens_tra(t_tau, :) + ens_inc_tra(:) !lulv 20210707
+
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                    ens_bt_t_tra(:) = ens_tra(t_tau, :)
+                                                    ens_inc_bt_t_tra(:) = ens_inc_tra(:)
+                                                    std_oi_bt_t = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_t_tra, ens_inc_bt_t_tra,&
+                                                      & ens_tra(t_tau, :), ens_size, ens_inc_tra, cov_factor_v,& !lulv 20210707
+                                                      & std_oi_bt_t, std_oi_g)
+                                                 ens_tra(t_tau, :) = ens_tra(t_tau, :) + ens_inc_tra(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              doloop_0: do j_ens=1, ens_size ! (0)
+                                                 if ( ens_tra(t_tau, j_ens) > 39.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens_tra(t_tau,j_ens) !lulv 20210707
+                                                    ens_tra(t_tau, j_ens) = 39.0 !lulv 20210707
+                                                 end if
+                                                 if ( ens_tra(t_tau, j_ens) < -4.0 ) then !lulv 20210707
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F25.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens_tra(t_tau,j_ens) !lulv 20210707
+                                                    ens_tra(t_tau, j_ens) = -4.0 !lulv 20210707
+                                                 end if
+                                              end do doloop_0 ! handle the extremeties (0)
+                                           end if ifblock_0_60_1
+
+                                           ! temperature impact salinity
+                                           ifblock_0_50: if ( temp_to_salt ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                          if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+!                       if ( local_tropatl_ts ) then
+!                          if ( (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon >280.0 ) &
+!                             & .or. (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+!                              dist = 2.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+!                         end if
+!                       end if
+
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc_tra(:) = 0.0
+
+                                              ifblock_0_50_1: if ( sum(ens_tra(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then !lulv 20210707
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_temp_tra,&
+                                                         & obs_inc_eakf_temp_tra, obs_inc_oi_temp_tra, ens_tra(s_tau, :),& !lulv 20210707
+                                                         & ens_size, ens_inc_tra, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens_tra(s_tau, :)   = ens_tra(s_tau, :) + ens_inc_tra(:) !lulv 20210707
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                       ens_bt_s_tra(:) = ens_tra(s_tau, :) !lulv 20210707
+                                                       ens_inc_bt_s_tra(:) = ens_inc_tra(:)
+                                                       std_oi_bt_s = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_s_tra, ens_inc_bt_s_tra,&
+                                                         ens_tra(s_tau, :), ens_size, ens_inc_tra, cov_factor_v,& !lulv 20210707
+                                                         & std_oi_bt_s, std_oi_g)
+                                                    ens_tra(s_tau, :) = ens_tra(s_tau, :) + ens_inc_tra(:) !lulv 20210707
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 doloop_00: do j_ens = 1, ens_size ! (0)
+                                                    if ( ens_tra(s_tau, j_ens) > 44.0 ) then !lulv 20210707
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)') &
+                                                            & ii_ens, jj_ens, kk_ens, ens_tra(s_tau,j_ens) !lulv 20210707
+                                                       ens_tra(s_tau, j_ens) = 44.0 !lulv 20210707
+                                                    end if
+
+                                                    if ( ens_tra(s_tau, j_ens) < 0.0 ) then !lulv 20210707
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens_tra(s_tau,j_ens) !lulv 20210707
+                                                       ens_tra(s_tau, j_ens) = 0.0 !lulv 20210707
+                                                    end if
+                                                 end do doloop_00 ! handle the extremeties (0)
+                                              end if ifblock_0_50_1
+                                           end if ifblock_0_50 ! impact salinity or not (0.5)
+
+                                        end if ifblock_0_60 ! finish processing temperature profiles (0.60)
+
+                                        ifblock_0_61: if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                             & Profiles(lji0)%variable == WOAS_ID ) then ! (0.61)
+                                           ! using salinity adjusts salinity and temperature
+                                           ! salinity itself
+                                           if ( kk_ens <= kk0+max_impact_levels ) then
+                                              cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                                   & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                           else ! for deeper than kk_bot+max_impact_levels
+                                              cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                                   & d_g(kk0+max_impact_levels)), &
+                                                   & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                           end if
+
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+                       if ( local_tropatl_box ) then
+                        if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+
+                      if ( global_tropatl_s2s ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc_tra(:) = 0.0
+                                           ifblock_0_61_1: if ( sum(ens_tra(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then !lulv 20210707
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = 1
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                 call update_from_obs_inc_prf_hyb(enso_salt_tra,&
+                                                      & obs_inc_eakf_salt_tra, obs_inc_oi_salt_tra, ens_tra(s_tau, :),& !lulv 20210707
+                                                      & ens_size, ens_inc_tra, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens_tra(s_tau, :)   = ens_tra(s_tau, :) + ens_inc_tra(:) !lulv 20210707
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                    ens_bt_s_tra(:) = ens_tra(s_tau, :)
+                                                    ens_inc_bt_s_tra(:) = ens_inc_tra(:)
+                                                    std_oi_bt_s = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_s_tra, ens_inc_bt_s_tra,&
+                                                      & ens_tra(s_tau, :), ens_size, ens_inc_tra, cov_factor_v,&
+                                                      & std_oi_bt_s, std_oi_g)
+                                                 ens_tra(s_tau, :)   = ens_tra(s_tau, :) + ens_inc_tra(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              do j_ens = 1, ens_size ! (0)
+                                                 if ( ens_tra(s_tau, j_ens) > 44.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens_tra(s_tau,j_ens)
+                                                    ens_tra(s_tau, j_ens) = 44.0
+                                                 end if
+                                                 if ( ens_tra(s_tau, j_ens) < 0.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens_tra(s_tau,j_ens)
+                                                    ens_tra(s_tau, j_ens) = 0.0
+                                                 end if
+                                              end do ! handle the extremeties (0)
+                                           end if ifblock_0_61_1
+
+                                           ! salinity impact temperature
+                                           ifblock_0_5: if ( salt_to_temp ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                         if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+                      if ( local_tropatl_s2t ) then
+                       if ( (obs_loc%lat < tropatl_s2t_latn .and. obs_loc%lat > tropatl_s2t_lats .and. obs_loc%lon >280.0 ) &
+                         & .or. (obs_loc%lat < tropatl_s2t_latn  .and. obs_loc%lat > tropatl_s2t_lats  .and. obs_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+                           dist = 3.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+                        end if
+                      end if
+                     if ( global_tropatl_s2t ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc_tra(:) = 0.0
+                                              ifblock_0_5_1: if ( sum(ens_tra(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_salt_tra,&
+                                                         & obs_inc_eakf_salt_tra, obs_inc_oi_salt_tra, ens_tra(t_tau, :),&
+                                                         & ens_size, ens_inc_tra, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens_tra(t_tau, :)   = ens_tra(t_tau, :) + ens_inc_tra(:)
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                       ens_bt_t_tra(:) = ens_tra(t_tau, :)
+                                                       ens_inc_bt_t_tra(:) = ens_inc_tra(:)
+                                                       std_oi_bt_t = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_t_tra, ens_inc_bt_t_tra,&
+                                                         & ens_tra(t_tau, :), ens_size, ens_inc_tra, cov_factor_v,&
+                                                         & std_oi_bt_t, std_oi_g)
+                                                    ens_tra(t_tau, :)   = ens_tra(t_tau, :) + ens_inc_tra(:)
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 do j_ens = 1, ens_size ! (0)
+                                                    if ( ens_tra(t_tau, j_ens) > 39.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens_tra(t_tau,j_ens)
+                                                       ens_tra(t_tau, j_ens) = 39.0
+                                                    end if
+                                                    if(ens_tra(t_tau, j_ens) < -4.0) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens_tra(t_tau,j_ens)
+                                                       ens_tra(t_tau, j_ens) = -4.0
+                                                    end if
+                                                 end do ! handle the extremeties (0)
+                                              end if ifblock_0_5_1
+                                           end if ifblock_0_5 ! impact temperature or not (0.5)
+
+                                        end if ifblock_0_61 ! finish processing slinity profiles (0.61)
+
+                                     end if ifblock_1 ! only use obs which has cov_factor > 0.0 (1)
+                                  end if ifblock_2 ! only do non-masked points (2)
+                               end do doloop_3 ! finish adjustments for related model levels (3)
+
+                               if ( Profiles(lji0)%depth(kk) < d4ass_txty .and. &
+                                    & (model_loc%lat > ass_txty_lat_start .and. &
+                                    & model_loc%lat < ass_txty_lat_end) ) then ! lat and depth
+                                  if ( ens_mean_tra(i_h) /= 0.0 ) then ! ens_mean_tra = 0.0
+                                     dist0 = txty_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                     cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                          & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                     cov_factor_v = comp_cov_factor(Profiles(lji0)%depth(kk), d4ass_txty)
+                                     cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                     ass_variable = 2
+
+                                     if ( Profiles(lji0)%variable == TEMP_ID ) then ! TEMP_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc_tra(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens_tra(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp_tra, obs_inc_eakf_temp_tra,&
+                                                   & obs_inc_oi_temp_tra, ens_tra(i_uflx, :), ens_size,&
+                                                   & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens_tra(i_uflx, :) = ens_tra(i_uflx, :) + ens_inc_tra(:)
+                                           end if
+
+                                           ens_inc_tra(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens_tra(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp_tra, obs_inc_eakf_temp_tra,&
+                                                   & obs_inc_oi_temp_tra, ens_tra(i_vflx, :), ens_size,&
+                                                   & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens_tra(i_vflx, :) = ens_tra(i_vflx, :) + ens_inc_tra(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! TEMP_ID
+
+                                     if ( Profiles(lji0)%variable == SALT_ID ) then ! SALT_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc_tra(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens_tra(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt_tra, obs_inc_eakf_salt_tra,&
+                                                   & obs_inc_oi_salt_tra, ens_tra(i_uflx, :), ens_size,&
+                                                   & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens_tra(i_uflx, :) = ens_tra(i_uflx, :) + ens_inc_tra(:)
+                                           end if
+
+                                           ens_inc_tra(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens_tra(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt_tra, obs_inc_eakf_salt_tra,&
+                                                   & obs_inc_oi_salt_tra, ens_tra(i_vflx, :), ens_size,&
+                                                   & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens_tra(i_vflx, :) = ens_tra(i_vflx, :) + ens_inc_tra(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! SALT_ID
+                                  end if ! ens_mean_tra=0.0
+                               end if ! lat and depth
+                            end if ! add each level flag
+                         end do doloop_4 ! go through one profile column (4)
+                      end if ifblock_4_4 ! T,S -> T,S,U,V,tx,ty; ETA -> T,S,U,V (4.4)
+!!$                   end if ifblock_5 ! only adjust points that have a positive cov_factor (d&t) (5)
+                end if ifblock_6 ! get rid of land points (6)
+             end if ! get rid of obs crossing the basin bound (optional) (7)
+          end do doloop_8 ! finish the adjustments for all related model columns (8)
+       end if ! control 10d time window (5+ & 5-)
+       ! if (ngrids == 0) print*,'ngrids=',ngrids,'in pe=',mpp_pe()
+
+       end if ! ifblock prf accepted
+
+    end do doloop_9 ! finish all profiles (9)
+
+    !===== Eakf assim finish =====================================
+
+    ! Compute ensemble mean of current assimilated state
+    !
+    ! Redistribute the sub ensemble state vector ens_tra(:, :) back to the model grids
+    ! in the local-domain.
+    call red_ens(temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens,&
+         & halox, haloy, nk, ens_tra, ass_method)
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished red_ens")') mpp_pe()
+    end if
+
+!!$    ! store the adj amount in corr_t(s)
+!!$    do j_ens=1, ens_size
+!!$       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$    end do
+!!$    ! extend the adj amount to the deep water
+!!$    do j_ens=1, ens_size
+!!$       do j=jsd, jed
+!!$          do i=isd, ied
+!!$             obs_only: do k = 3, nk ! how about obs only ssh?
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) == 0.0 ) exit obs_only
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) /= 0.0 ) then
+!!$                   write (UNIT=stdout_unit, FMT='("corr_t(",I8,")%data(",3I5,") = ",F15.8)')&
+!!$                        & j_ens, i, j, k, corr_t(j_ens)%data(i,j,k)
+!!$                   write (UNIT=stdout_unit, FMT='("corr_s(",I8,")%data(",3I5,") = ",F25.8)')&
+!!$                        & j_ens, i, j, k, corr_s(j_ens)%data(i,j,k)
+!!$                end if
+!!$             end do obs_only
+!!$             nk_adj = k-1
+!!$             if ( d_g(nk_adj) <= 200.0 ) e_flder_aed = 20.0
+!!$             if ( d_g(nk_adj) > 200.0 .and. d_g(nk_adj) <= 500.0 ) e_flder_aed = 50.0
+!!$             if ( d_g(nk_adj) > 500.0 .and. d_g(nk_adj) <= 1000.0 ) e_flder_aed = 200.0
+!!$             if ( d_g(nk_adj) > 1000.0 ) e_flder_aed = 500.0
+!!$             do k=nk_adj+1, nk
+!!$                zfcn = exp(-(d_g(k)-d_g(nk_adj))/e_flder_aed)
+!!$                temp_ens_tau(j_ens)%data(i,j,k) = temp_ens_tau(j_ens)%data(i,j,k) + corr_t(j_ens)%data(i,j,nk_adj)*zfcn
+!!$                salt_ens_tau(j_ens)%data(i,j,k) = salt_ens_tau(j_ens)%data(i,j,k) + corr_s(j_ens)%data(i,j,nk_adj)*zfcn
+!!$             end do
+!!$          end do
+!!$       end do
+!!$    end do
+
+    call obs_end()
+
+    first_run_call = .false.
+    deallocate(list_close_grids)
+!    call mpp_clock_end(id_eakf_total) !lulv comment
+  end subroutine ensemble_filter
+
+
+  ! Initialize arrays and other module variables
+  subroutine eakf_oda_init(MODEL_SIZE, ENS_SIZE, ISD, IED, JSD, JED, NK)
+    integer, intent(in) :: MODEL_SIZE, ENS_SIZE
+    integer, intent(in) :: ISD, IED, JSD, JED, NK
+
+    integer :: istat, j_ens
+
+    character(len=128) :: emsg_local
+
+    if ( module_initialized ) then
+       call error_mesg('eakf_oda_mod::eakf_oda_init', 'Module already initialized.', WARNING)
+    else
+       !       call mpp_print_memuse_stats('eakf_oda_init Start')
+
+       allocate(ens(MODEL_SIZE, ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,",",I5,")")') 'ens', MODEL_SIZE, ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens = 0.0
+!lulv add ensb, ens_tmp
+       allocate(ensb(MODEL_SIZE, ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,",",I5,")")') 'ensb', MODEL_SIZE, ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ensb = 0.0
+
+       allocate(ens_tmp(MODEL_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,",",I5,")")') 'ens_tmp', MODEL_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_tmp = 0.0 !lulv add ens_tmp 2020-04-13
+
+       allocate(ens_mean(MODEL_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_mean', MODEL_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_mean = 0.0
+
+       allocate(enso_temp(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_temp', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_temp = 0.0
+!lulv add enso_temp_stn and enso_temp_lfq
+       allocate(enso_temp_stn(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_temp_stn', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_temp_stn = 0.0
+
+       allocate(enso_temp_lfq(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_temp_lfq', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_temp_lfq = 0.0
+
+       allocate(enso_temp_hfq(ENS_SIZE), STAT=istat) !lulv 20201123
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_temp_hfq', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_temp_hfq = 0.0
+
+       allocate(enso_temp_hea(ENS_SIZE), STAT=istat) !lulv 20201127
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_temp_hea', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_temp_hea = 0.0
+
+       allocate(obs_inc_eakf_temp(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_eakf_temp', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_eakf_temp= 0.0
+
+       allocate(obs_inc_oi_temp(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_oi_temp', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_oi_temp = 0.0
+
+       allocate(ens_inc(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_inc', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_inc = 0.0
+
+       allocate(enso_salt(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_salt', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_salt = 0.0
+!lulv add enso_salt_stn and enso_salt_lfq
+       allocate(enso_salt_stn(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_salt_stn', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_salt_stn = 0.0
+
+       allocate(enso_salt_lfq(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_salt_lfq', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_salt_lfq = 0.0
+
+       allocate(enso_salt_hfq(ENS_SIZE), STAT=istat) !lulv 20201127
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_salt_hfq', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_salt_hfq = 0.0
+
+       allocate(obs_inc_eakf_salt(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_eakf_salt', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_eakf_salt = 0.0
+
+       allocate(obs_inc_oi_salt(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_oi_salt', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_oi_salt = 0.0
+
+       allocate(ens_inc_bt_t(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_inc_bt_t', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_inc_bt_t = 0.0
+
+       allocate(ens_inc_bt_s(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_inc_bt_s', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_inc_bt_s = 0.0
+
+       allocate(ens_bt_t(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_bt_t', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_bt_t = 0.0
+
+       allocate(ens_bt_s(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_bt_s', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_bt_s = 0.0
+
+       allocate(ens_in(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_in', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_in = 0.0
+
+       allocate(ens_out(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_out', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_out = 0.0
+
+       ! for special handling on corrections in vertical direction
+       !       allocate(corr_t(ENS_SIZE), STAT=istat)
+       !       if ( istat .ne. 0 ) then
+       !          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'corr_t', ENS_SIZE
+       !          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       !       end if
+
+       !       allocate(corr_s(ENS_SIZE), STAT=istat)
+       !       if ( istat .ne. 0 ) then
+       !          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'corr_s', ENS_SIZE
+       !          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       !       end if
+
+       !       do j_ens=1, ENS_SIZE
+       !          allocate(corr_t(j_ens)%data(ISD:IED,JSD:JED,1:NK), STAT=istat)
+       !          if ( istat .ne. 0 ) then
+       !             write (UNIT=emsg_local, FMT='(A,"(",I5,")%data(",I5,":",I5,",",I5,":",I5,", 1:",I5,")")')&
+       !                  & 'corr_t', j_ens, ISD, IED, JSD, JED, NK
+       !             call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       !          end if
+       !          corr_t(j_ens)%data(ISD:IED,JSD:JED,1:NK) = 0.0
+
+       !          allocate(corr_s(j_ens)%data(ISD:IED,JSD:JED,1:NK), STAT=istat)
+       !          if ( istat .ne. 0 ) then
+       !             write (UNIT=emsg_local, FMT='(A,"(",I5,")%data(",I5,":",I5,",",I5,":",I5,", 1:",I5,")")')&
+       !                  & 'corr_s', j_ens, ISD, IED, JSD, JED, NK
+       !             call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       !          end if
+       !          corr_s(j_ens)%data(ISD:IED,JSD:JED,1:NK) = 0.0
+       !       end do
+
+       allocate(d_g(NK), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='("d_g(",I5,")")') NK
+          call error_mesg('eakf_oda_mod::eakf_oda_init', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       d_g = 0.0
+
+       !       call mpp_print_memuse_stats('eakf_oda_init End')
+
+    end if
+
+    module_initialized = .true.
+  end subroutine eakf_oda_init
+
+
+  subroutine eakf_oda_init_tra(MODEL_SIZE, ENS_SIZE, ISD, IED, JSD, JED, NK)
+!lulv add the entire subroutine 20210707
+    integer, intent(in) :: MODEL_SIZE, ENS_SIZE
+    integer, intent(in) :: ISD, IED, JSD, JED, NK
+
+    integer :: istat, j_ens
+
+    character(len=128) :: emsg_local
+
+    if ( module_initialized_tra ) then
+       call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Module already initialized.', WARNING)
+    else
+       !       call mpp_print_memuse_stats('eakf_oda_init_tra Start')
+
+       allocate(ens_tra(MODEL_SIZE, ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,",",I5,")")') 'ens_tra', MODEL_SIZE, ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_tra = 0.0
+
+       allocate(ens_mean_tra(MODEL_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_mean_tra', MODEL_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_mean_tra = 0.0
+
+       allocate(enso_temp_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_temp_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_temp = 0.0
+
+       allocate(obs_inc_eakf_temp_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_eakf_temp_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_eakf_temp_tra= 0.0
+
+       allocate(obs_inc_oi_temp_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_oi_temp_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_oi_temp_tra = 0.0
+
+       allocate(ens_inc_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_inc_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_inc_tra = 0.0
+
+       allocate(enso_salt_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'enso_salt_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       enso_salt_tra = 0.0
+
+       allocate(obs_inc_eakf_salt_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_eakf_salt_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_eakf_salt_tra = 0.0
+
+       allocate(obs_inc_oi_salt_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'obs_inc_oi_salt_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       obs_inc_oi_salt_tra = 0.0
+
+       allocate(ens_inc_bt_t_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_inc_bt_t_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_inc_bt_t_tra = 0.0
+
+       allocate(ens_inc_bt_s_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_inc_bt_s_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_inc_bt_s_tra = 0.0
+
+       allocate(ens_bt_t_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_bt_t_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_bt_t_tra = 0.0
+
+       allocate(ens_bt_s_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_bt_s_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_bt_s_tra = 0.0
+
+       allocate(ens_in_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_in_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_in_tra = 0.0
+
+       allocate(ens_out_tra(ENS_SIZE), STAT=istat)
+       if ( istat .ne. 0 ) then
+          write (UNIT=emsg_local, FMT='(A,"(",I5,")")') 'ens_out_tra', ENS_SIZE
+          call error_mesg('eakf_oda_mod::eakf_oda_init_tra', 'Cannot allocate memory for array '//trim(emsg_local), FATAL)
+       end if
+       ens_out_tra = 0.0
+
+       if ( allocated(d_g) ) then
+       !do nothing
+       else
+         allocate(d_g(NK)) 
+         d_g = 0.0
+       end if
+    end if
+
+    module_initialized_tra = .true.
+  end subroutine eakf_oda_init_tra
+
+  subroutine ensemble_filter_sfc(temp_ens_tau, salt_ens_tau, &
+       & uflx_ens, vflx_ens, &
+       & sst_climo, isc, iec, jsc, jec, halox, haloy, T_grid, m_time)
+
+    type(field_type), dimension(:), intent(inout) :: temp_ens_tau, salt_ens_tau
+    type(field_type), dimension(:), intent(inout) :: uflx_ens, vflx_ens
+    type(obs_clim_type), intent(in) :: sst_climo
+    type(grid_type), intent(in) :: T_grid
+    type(time_type), intent(in) :: m_time
+    integer, intent(in) :: isc, iec, jsc, jec, halox, haloy
+
+    real :: sigma_o_sst = 0.5
+    real :: sigma_o_sss = 0.1
+    real :: sigma_o_ssh = 0.05
+    logical :: salt_to_temp = .false.
+    logical :: temp_to_salt = .false.
+    real :: dist_temp = 1000.0e3
+    real :: dist_salt = 500.0e3
+    real :: depth_coast = 1000.0
+    real :: obs_inc_sigmasst_cut = 2.0
+
+    integer :: ii_do = 10
+    integer :: jj_do = 10
+    integer :: kk_do = 10
+
+!! x1y add sst ramping
+    logical :: sst_ramping = .false.
+    logical :: sst_ramping_natl = .false.
+    logical :: kk_do_lat = .false.
+    logical :: sstlocal_tropics_min = .false.
+    real :: kk_do_lat_h = 30.0
+    real :: kk_do_lat_l = 15.0
+    real :: sst_lat_n = 60.0
+    real :: sst_lat_s = -55.0
+
+    namelist /eakf_sfc_nml/sigma_o_sst, sigma_o_sss, sigma_o_ssh, ii_do, jj_do, kk_do, &
+         & dist_temp, dist_salt, salt_to_temp, temp_to_salt, depth_coast, obs_inc_sigmasst_cut, &
+         & sst_ramping, sst_lat_n, sst_lat_s, sst_ramping_natl, kk_do_lat, kk_do_lat_h, kk_do_lat_l,&
+         & sstlocal_tropics_min
+
+    integer :: ii_ens, jj_ens, model_size
+    integer :: i, j, k, j_ens, npe, npes, ens_size, pe_curr, ni, nj, nk
+    integer :: i_o, j_o, i_m, j_m
+    integer :: unit, ierr, io
+    integer :: stdout_unit
+
+    integer :: ass_method, ass_variable, assim_flag
+    real :: cov_factor_h, cov_factor_v, cov_factor, dist, dist0, obs_var_t, obs_value
+    real :: std_oi_o, cor_oi, std_oi_g
+    real :: obs_var_t_oi
+    !-----------------------------------------------------
+    real :: prf_depth, depth_factor, depth_lat, obs_inc_sigma
+    integer :: idx_depth
+    !-----------------------------
+    real :: sst_ramping_factor, dlat
+    integer :: kk_do2
+
+    type(loc_type) :: model_loc, obs_loc
+
+    stdout_unit = stdout()
+
+    ni = T_grid%ni
+    nj = T_grid%nj
+    nk = T_grid%nk
+    ens_size = size(temp_ens_tau)
+
+    npes = mpp_npes()
+    pe_curr = mpp_pe()
+
+    ! Read namelist for run time control
+    if ( file_exist('input.nml') ) then
+       unit = open_namelist_file()
+       read(unit, nml = eakf_sfc_nml, iostat=io)
+       call close_file(unit)
+    else
+       ! Set mystat to an arbitrary positive number if input.nml does not exist.
+       io = 100
+    end if
+
+    if ( check_nml_error(io, 'eakf_sfc_nml') < 0 ) then
+       if ( mpp_pe() == mpp_root_pe() ) then
+          call error_mesg('eakf_mod::ensemble_filter_sfc', 'EAKF_SFC_NML not found in input.nml. Using defaults.', WARNING)
+       end if
+    end if
+
+    ass_method = 1
+    call init_model(isc, iec, jsc, jec, halox, haloy, nk, ass_method)
+    model_size = get_model_size()
+
+    if ( .not.module_initialized_tra ) then
+       !call eakf_oda_init(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isc, IED=iec, JSD=jsc, JED=jec, NK=nk)
+       call eakf_oda_init_tra(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isc, IED=iec, JSD=jsc, JED=jec, NK=nk) !lulv 20210727
+    end if
+
+    d_g(:) = T_grid%z(:)
+
+    obs_var_t = sigma_o_sst*sigma_o_sst
+
+    do j = jsc-haloy, jec+haloy
+       do i = isc-halox, iec+halox
+
+          i_o = i
+          j_o = j
+          !      if ( i_o <= 0 ) i_o = i_o + ni
+          !      if ( i_o > ni ) i_o = i_o - ni
+
+          if ( j_o > 0 .and. j_o <= nj ) then ! limit j_o
+
+             obs_value = sst_climo%sst_obs(i,j)
+             std_oi_o = 0.0
+
+             do j_ens = 1, ens_size
+                enso_temp_tra(j_ens) = temp_ens_tau(j_ens)%data(i, j, 1)
+             end do
+
+             obs_var_t_oi = 25.0*obs_var_t
+             obs_inc_eakf_temp_tra = 0.0
+             obs_inc_oi_temp_tra = 0.0
+             call obs_increment_prf_eta_hyb(enso_temp_tra, ens_size, obs_value, obs_var_t, &
+                  & obs_inc_eakf_temp_tra, obs_var_t_oi, obs_inc_oi_temp_tra, std_oi_o)
+             if (abs(obs_value) > 100.0 ) obs_inc_eakf_temp_tra(:) = 0.0
+             obs_inc_sigma = sqrt(sum(obs_inc_eakf_temp_tra(:)*obs_inc_eakf_temp_tra(:))/ens_size)
+             if (obs_inc_sigma > obs_inc_sigmasst_cut) then
+                obs_inc_eakf_temp_tra(:) = obs_inc_sigmasst_cut/obs_inc_sigma*obs_inc_eakf_temp_tra(:)
+             end if
+
+             obs_loc%lat = T_grid%y(i_o, j_o)
+             obs_loc%lon = T_grid%x(i_o, j_o) + 360.0
+             if ( obs_loc%lon > 360.0 ) obs_loc%lon = obs_loc%lon-360.0
+
+             ! snz add on Mar. 22, 2012 to differ the impact radius in coast area
+             idx_depth = sum(T_grid%mask(i_o,j_o,:))
+
+             !if (idx_depth == 0) then
+             !print*,'pe:',mpp_pe(),'i_o,j_o=',i_o,j_o,'idx_depth=',idx_depth
+             !print*,'pe:',mpp_pe(),'T_grid%mask(',i_o,j_o,':)=',T_grid%mask(i_o,j_o,:)
+             !end if
+
+             depth_factor = 1.0
+
+             if (idx_depth > 0 .and. idx_depth <= nk) then ! only when idx_depth is ok
+
+                if ((obs_loc%lat < 10.0 .and. obs_loc%lon > 290.0 .and. obs_loc%lon < 335.0) .or. &
+                     (obs_loc%lat >= 10.0 .and. obs_loc%lat <= 20.0 .and. obs_loc%lon > 270.0 .and. obs_loc%lon < 335.0) &
+                     .or. (obs_loc%lat > 20.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 335.0)) then ! the west of Atlantic
+                   prf_depth = d_g(idx_depth)
+                   if (abs(obs_loc%lat) < 20.0) then
+                      if (prf_depth > 2.*depth_coast) then
+                         depth_factor = 1.0
+                      elseif (prf_depth < 0.2*2.*depth_coast) then
+                         depth_factor = 0.2
+                      else
+                         depth_factor = prf_depth/(2.*depth_coast)
+                      end if
+                   end if
+                   if (abs(obs_loc%lat) >= 20.0 .and. abs(obs_loc%lat) <= 40.0) then
+                      if (prf_depth > 1.5*depth_coast) then
+                         depth_factor = 1.0
+                      elseif (prf_depth < 0.2*1.5*depth_coast) then
+                         depth_factor = 0.2
+                      else
+                         depth_factor = prf_depth/(1.5*depth_coast)
+                      end if
+                   end if
+                   if (abs(obs_loc%lat) > 40.0 .and. abs(obs_loc%lat) <= 60.0) then
+                      if (prf_depth > depth_coast) then
+                         depth_factor = 1.0
+                      elseif (prf_depth < 0.2*depth_coast) then
+                         depth_factor = 0.2
+                      else
+                         depth_factor = prf_depth/depth_coast
+                      end if
+                   end if
+                   if (abs(obs_loc%lat) > 60.0) then
+                      depth_factor = 1.0
+                   end if
+                end if ! the west of Atlantic
+
+             end if ! only when idx_depth is ok
+
+             if (depth_factor < 0.0 .or. depth_factor > 1.0) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": depth_factor = ",e12.6)') mpp_pe(), depth_factor
+                stop
+             end if
+             ! end of snz add on dec. 17, 2011 to differ the impact radius in coast area
+
+             !print*,'in pe',mpp_pe(),'depth_factor=', depth_factor
+
+             do jj_ens = j - jj_do, j + jj_do ! loop over neigbourhood points
+                do ii_ens = i - ii_do, i + ii_do ! loop over neigbourhood points
+
+                   i_m = ii_ens
+                   j_m = jj_ens
+                   !         if ( i_m <= 0 ) i_m = i_m + ni
+                   !         if ( i_m > ni ) i_m = i_m - ni
+
+                   if ( (ii_ens >= isc-halox .and. ii_ens <= iec+halox) .and. &
+                        (jj_ens >= jsc-haloy .and. jj_ens <= jec+haloy) .and. &
+                        (j_m > 0 .and. j_m <= nj) ) then ! process in the local domain
+
+                      model_loc%lat = T_grid%y(i_m, j_m)
+                      model_loc%lon = T_grid%x(i_m, j_m) + 360.0
+                      if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+
+                      assim_flag = 1
+
+                      if ( (model_loc%lat > 18.0 .and. model_loc%lon > 260.0 .and. model_loc%lon < 280.0) .and. &
+                           & (obs_loc%lat > 18.0 .and. obs_loc%lon > 240.0 .and. obs_loc%lon < 260.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 18.0 .and. model_loc%lon > 240.0 .and. model_loc%lon < 260.0) .and. &
+                           & (obs_loc%lat > 18.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 280.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon > 270.0) &
+                           & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon < 270.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon < 270.0) &
+                           & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon > 270.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon > 275.0) &
+                           & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon < 275.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon < 275.0) &
+                           & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon > 275.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                           & model_loc%lon > 290.0 .and. model_loc%lon < 360.0 ) .and. &
+                           & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                           & obs_loc%lon > 110.0 .and. obs_loc%lon < 290.0) ) assim_flag = 0
+                      if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                           & model_loc%lon > 110.0 .and. model_loc%lon < 290.0) .and. &
+                           & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                           & obs_loc%lon > 290.0 .and. obs_loc%lon < 360.0) ) assim_flag = 0
+
+                      ! west bound
+                      if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon > 100.0) .and. &
+                           & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon < 100.0) .and. &
+                           & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon > 100.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon > 77.0) .and. &
+                           & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon < 77.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon < 77.0) .and. &
+                           & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon > 77.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                           & model_loc%lon > 145.0 .and. model_loc%lon < 165.0) .and. &
+                           & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                           & obs_loc%lon > 125.0 .and. obs_loc%lon < 145.0) ) assim_flag = 0
+                      if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                           & model_loc%lon > 125.0 .and. model_loc%lon < 145.0) .and. &
+                           & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                           & obs_loc%lon > 145.0 .and. obs_loc%lon < 165.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                           & model_loc%lon > 25.0 .and. model_loc%lon < 100.0) .and. &
+                           & (obs_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                           & obs_loc%lon > 0.0 .and. obs_loc%lon < 25.0) ) assim_flag = 0
+                      if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                           & model_loc%lon > 0.0 .and. model_loc%lon < 25.0) .and. &
+                           & (obs_loc%lat > -35.0 .and. obs_loc%lat < 20.0 .and. &
+                           & obs_loc%lon > 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+
+                      if ( assim_flag /= 0 ) then ! no assimilation between basins separated by land
+
+                         dist = get_dist(model_loc, obs_loc)
+                         dist = RADIUS*sqrt(dist)
+                         dist0 = dist_temp*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+ !! x1y add for testing localization changing with latitude (centered in the Equ.)
+                      if ( sstlocal_tropics_min ) then
+                       if ( obs_loc%lat <10.0 .and. obs_loc%lat > -10.0 ) then
+                            if ( abs(obs_loc%lat) <= 5.0 ) then
+                              dist0 = dist_temp*depth_factor*(cos(3.14159*(model_loc%lat-obs_loc%lat)*0.5/10.0))**2 &
+                                    & *(cos(3.14159*(model_loc%lon-obs_loc%lon)*0.5/40.0))**2 
+                            else
+                              dist0 = (1.0-(abs(obs_loc%lat)-5.0)/5.0)*depth_factor*dist_temp  &
+                                    & *(cos(3.14159*(model_loc%lat-obs_loc%lat)*0.5/10.0))**2  &
+                                    & *(cos(3.14159*(model_loc%lon-obs_loc%lon)*0.5/40.0))**2  &
+                                    & +(abs(obs_loc%lat)-5.0)/5.0*1.0*depth_factor*dist_temp   &
+                                    & *(cos(3.14159*(model_loc%lat-obs_loc%lat)*0.5/40.0))**2  &
+                                    & *(cos(3.14159*(model_loc%lon-obs_loc%lon)*0.5/40.0))**2
+                            end if
+                       end if
+                    end if
+
+
+                         cov_factor_h = comp_cov_factor(dist, dist0)*cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                    ! x1y add sst_ramping factor
+                         sst_ramping_factor = 1.0
+                      if (sst_ramping ) then
+                         if ( model_loc%lat <35.0 .and. model_loc%lat > -30.0 ) then
+                              sst_ramping_factor = 1.0
+                         else if ( model_loc%lat > sst_lat_n .or. model_loc%lat < sst_lat_s ) then
+                              sst_ramping_factor = 0.0
+                         else if ( model_loc%lat >= 35.0 .and. model_loc%lat <= sst_lat_n ) then
+                            sst_ramping_factor = (sst_lat_n-model_loc%lat)/(sst_lat_n-35.0)
+                         else if ( model_loc%lat <= -30.0 .and. model_loc%lat >= sst_lat_s ) then
+                            sst_ramping_factor = (sst_lat_s-model_loc%lat)/(sst_lat_s+30.0)
+                    !! stronger truncation in the Southern Hemisphere due to the strong bias in the SO
+                    !!                sst_ramping_factor = exp(-abs(model_loc%lat+35.0)/2)
+                         end if
+                      end if
+           !!! only for North Atlantic 260E-70E
+                     if (sst_ramping_natl ) then
+                         if ( (model_loc%lon >= 260.0 .and. model_loc%lon <= 360.0 ) .or. &
+                            & (model_loc%lon >= 0.0 .and. model_loc%lon <= 80.0 ) ) then
+                         if ( model_loc%lat < 45.0 ) then
+                              sst_ramping_factor = 1.0
+                         else if ( model_loc%lat > sst_lat_n ) then
+                              sst_ramping_factor = 0.0
+                         else if ( model_loc%lat >= 45.0 .and. model_loc%lat <= sst_lat_n ) then
+                            sst_ramping_factor = (sst_lat_n-model_loc%lat)/(sst_lat_n-45.0)
+                         end if
+                      end if
+                     end if
+
+                    if ( sst_ramping_factor < 0.0 ) then
+                      print *, 'sst_ramping_factor=', sst_ramping_factor,'model_loc%lat=',model_loc%lat
+                      print *, 'ii_ens=',ii_ens,'jj_ens=',jj_ens
+                    end if
+
+          !!! testing vertical corrlation of SST impact
+                    kk_do2 = kk_do
+                    dlat = kk_do_lat_h - kk_do_lat_l
+                    if ( kk_do_lat ) then
+                         if ( abs(model_loc%lat) >= kk_do_lat_h ) then
+                              kk_do2 = 1
+                         else if ( abs(model_loc%lat) <= kk_do_lat_l ) then
+                              kk_do2 = kk_do
+                         else if (abs(model_loc%lat) <=kk_do_lat_h .and. abs(model_loc%lat) >= kk_do_lat_l ) then
+                              kk_do2 = 1 + floor( (kk_do - 1 ) * (kk_do_lat_h - abs(model_loc%lat) )/ dlat )
+                         end if
+                    end if
+
+                    if ( kk_do2 < 1 ) then
+                        print *, 'kk_do2=', kk_do2, 'model_loc%lat=', model_loc%lat
+                     end if
+
+
+                      do k = 1, kk_do2 ! loop over top ocean
+
+                      !!      cov_factor_v = comp_cov_factor(real(k), kk_do*0.5)
+                            cov_factor_v = comp_cov_factor(real(k-1), kk_do2*0.5)
+                        !!    cov_factor = cov_factor_h*cov_factor_v
+                            cov_factor = cov_factor_h*cov_factor_v* sst_ramping_factor
+
+                            do j_ens = 1, ens_size
+                               ens_in_tra(j_ens) = temp_ens_tau(j_ens)%data(ii_ens,jj_ens,k)
+                            end do
+                            if ( sum(ens_in_tra(:))*sum(obs_inc_eakf_temp_tra(:)) /= 0.0 .and. cov_factor > 0.0 ) then ! process only cov_factor > 0
+                               std_oi_g = 0.0
+                               ass_variable = 1
+                               ass_method = 1
+                               cor_oi = 0.0
+                               ens_inc_tra(:) = 0.0
+                               call update_from_obs_inc(enso_temp_tra, obs_inc_eakf_temp_tra,&
+                                    & obs_inc_oi_temp_tra, ens_in_tra(:), ens_size,&
+                                    & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                    & ass_method, ass_variable)
+
+                               ens_in_tra(:) = ens_in_tra(:) + ens_inc_tra(:)
+
+                               do j_ens = 1, ens_size
+
+                                  if ( ens_in_tra(j_ens) > 39.0 ) then
+                                     write (UNIT=stdout_unit, FMT='("T(",4I5,") = ",F15.8)')&
+                                          & ii_ens, jj_ens, k, j_ens, ens_in_tra(j_ens)
+                                     ens_in_tra(j_ens) = 39.0
+                                  end if
+
+                                  if ( ens_in_tra(j_ens) < -4.0 ) then
+                                     write (UNIT=stdout_unit, FMT='("T(",4I5,") = ",F25.8)')&
+                                          & ii_ens, jj_ens, k, j_ens, ens_in_tra(j_ens)
+                                     ens_in_tra(j_ens) = -4.0
+                                  end if
+
+                                  temp_ens_tau(j_ens)%data(ii_ens,jj_ens, k) = ens_in_tra(j_ens)
+                               end do
+
+                               if (temp_to_salt) then
+                                  ass_variable = 2
+                                  ass_method = 2
+                                  do j_ens = 1, ens_size
+                                     ens_in_tra(j_ens) = salt_ens_tau(j_ens)%data(ii_ens,jj_ens, k)
+                                  end do
+                                  dist0 = dist_salt*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+!! x1y add for testing localization changing with latitude (centered in the Equ.)
+!!                      if ( sstlocal_tropics_min ) then
+!!                       if ( obs_loc%lat <10.0 .and. obs_loc%lat > -10.0 ) then
+!!                            if ( abs(obs_loc%lat) <= 5.0 ) then
+!!                              dist0 = dist_salt*0.25*depth_factor
+!!                            else
+!!                              dist0 = (1.0-(abs(obs_loc%lat)-5.0)/5.0)*0.25*depth_factor*dist_salt+ &
+!!                                   &  (abs(obs_loc%lat)-5.0)/5.0*1.0*depth_factor*dist_salt
+!!                            end if
+!!                       end if
+!!                    end if
+                                  cov_factor_h = comp_cov_factor(dist, dist0)*cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                            !!      cov_factor = cov_factor_h * cov_factor_v
+                                  cov_factor = cov_factor_h * cov_factor_v * sst_ramping_factor
+                                  ens_inc_tra(:) = 0.0
+                                  call update_from_obs_inc(enso_temp_tra, obs_inc_eakf_temp_tra,&
+                                       & obs_inc_oi_temp_tra, ens_in_tra(:), ens_size,&
+                                       & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                       & ass_method, ass_variable)
+
+                                  ens_in_tra(:) = ens_in_tra(:) + ens_inc_tra(:)
+
+                                  do j_ens = 1, ens_size
+
+                                     if ( ens_in_tra(j_ens) > 44.0 ) then
+                                        write (UNIT=stdout_unit, FMT='("S(",4I5,") = ",F15.8)')&
+                                             & ii_ens, jj_ens, k, j_ens, ens_in_tra(j_ens)
+                                        ens_in_tra(j_ens) = 44.0
+                                     end if
+
+                                     if ( ens_in_tra(j_ens) < 0.0 ) then
+                                        write (UNIT=stdout_unit, FMT='("S(",4I5,") = ",F25.8)')&
+                                             & ii_ens, jj_ens, k, j_ens, ens_in_tra(j_ens)
+                                        ens_in_tra(j_ens) = 0.0
+                                     end if
+
+                                     salt_ens_tau(j_ens)%data(ii_ens,jj_ens, k) = ens_in_tra(j_ens)
+
+                                  end do
+
+                               end if ! temp_to_salt
+
+                               ! using sst to correct tau_x
+                               ass_variable = 2
+                               ass_method = 2
+                               do j_ens = 1, ens_size
+                                  ens_in_tra(j_ens) = uflx_ens(j_ens)%data(ii_ens,jj_ens,1)
+                               end do
+                               dist = get_dist(model_loc, obs_loc)
+                               dist = RADIUS*sqrt(dist)
+                               dist0 = dist_temp*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                               cov_factor = comp_cov_factor(dist, dist0)*cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                               cor_oi = 0.0
+                               ens_inc_tra(:) = 0.0
+                               call update_from_obs_inc(enso_temp_tra, obs_inc_eakf_temp_tra,&
+                                    & obs_inc_oi_temp_tra, ens_in_tra(:), ens_size,&
+                                    & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                    & ass_method, ass_variable)
+
+                               ens_in_tra(:) = ens_in_tra(:) + ens_inc_tra(:)
+
+                               do j_ens = 1, ens_size
+                                  uflx_ens(j_ens)%data(ii_ens,jj_ens,1) = ens_in_tra(j_ens)
+                               end do
+                               ! using sst to correct tau_y
+                               do j_ens = 1, ens_size
+                                  ens_in_tra(j_ens) = vflx_ens(j_ens)%data(ii_ens,jj_ens,1)
+                               end do
+                               ens_inc_tra(:) = 0.0
+                               call update_from_obs_inc(enso_temp_tra, obs_inc_eakf_temp_tra,&
+                                    & obs_inc_oi_temp_tra, ens_in_tra(:), ens_size,&
+                                    & ens_inc_tra, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                    & ass_method, ass_variable)
+
+                               ens_in_tra(:) = ens_in_tra(:) + ens_inc_tra(:)
+
+                               do j_ens = 1, ens_size
+                                  vflx_ens(j_ens)%data(ii_ens,jj_ens,1) = ens_in_tra(j_ens)
+                               end do
+
+                            end if ! process only cov_factor > 0
+
+                         end do ! loop over top ocean 
+
+                      end if ! no assimilation between basins separated by land
+
+                   end if ! process the local domain
+
+                end do ! loop over neigbourhood points
+             end do ! loop over neigbourhood points
+
+          end if ! limit j_o
+
+       end do ! loop over sfc data points
+    end do ! loop over sfc data points
+
+    return
+
+  end subroutine ensemble_filter_sfc
+  
+!  subroutine ensemble_filter(temp_ens_tau, salt_ens_tau, uflx_ens, vflx_ens, &
+!       & Profiles, nprof, isd, ied, jsd, jed, halox, haloy, T_grid, iass, m_time)
+  subroutine ens_stn_filter(T_ens_stn, temp_ens_tau, salt_ens_tau, uflx_ens, vflx_ens, &
+       & Profiles, nprof, isd, ied, jsd, jed, halox, haloy, T_grid, itt, m_time) !lulv change T_grid
+    type(field_type), dimension(:), intent(inout) :: temp_ens_tau, salt_ens_tau
+    type(field_type), dimension(:), intent(inout) :: uflx_ens, vflx_ens
+    type(field_type), dimension(:,:), intent(inout) :: T_ens_stn !lulv
+    type(ocean_profile_type), dimension(:), intent(in) :: Profiles
+    type(grid_type), intent(in) :: T_grid
+    type(time_type), intent(in) :: m_time
+    integer, intent(inout) :: nprof
+    integer, intent(in) :: isd, ied, jsd, jed, halox, haloy
+!    integer, intent(inout) :: iass
+    integer, intent(in) :: itt !lulv
+    !---- namelist with default values
+    real :: cov_inflate = 1.0
+    real :: prf_window = 10.0 ! in days
+    real :: sigma_o_t = 1.0
+    real :: sigma_o_s = 1.0
+    real :: factor_woat = 100.0
+    real :: factor_woab = 25.0
+    real :: cov_factor = 0.0
+    real :: cutoff_v = 10.0
+    real :: std_cut_b = 0.031623
+    real :: std_cut_t = 1.00
+    real :: temp_dist = 1000.0e3
+    real :: salt_dist = 500.0e3
+    real :: txty_dist = 500.0e3
+    real :: prf_hyb_d = 500.0e3
+
+    integer :: max_impact_levels = 7
+    integer :: assim_freq = 1
+    integer :: ass_method = 1 ! 0 for snz-oi, 1 for eakf inv, 2 for eakf multv
+
+    logical :: add_on = .false.
+    logical :: ass_uv = .false.
+    logical :: ass_txty = .false.
+    logical :: salt_to_temp = .false.
+    logical :: temp_to_salt = .false.
+    logical :: debug_eakf = .false.
+    logical :: local_tropatl_box = .false.
+    logical :: local_tropatl_s2t = .false.
+    logical :: global_tropatl_s2t = .false.
+    logical :: global_tropatl_s2s = .false.
+
+    real :: ass_txty_lat_start = -20.0
+    real :: ass_txty_lat_end = 20.0
+    real :: d4ass_txty = 200.0 
+    real :: depth_cut = 500.0
+    real :: e_flder_oer = 2000.0
+    real :: woa_lat = 30.0 ! woa_lat >= 20.0
+    real :: depth_coast = 1000.0
+    real :: obs_inc_sigmat_cut = 2.0
+    real :: obs_inc_sigmas_cut = 1.0
+    real :: tropatl_s2t_latn = 20.0
+    real :: tropatl_s2t_lats = -10.0
+    real :: global_s2t_latn = 20.0
+    real :: global_s2t_lats = -10.0
+
+    namelist /stnf_nml/prf_window,sigma_o_t, sigma_o_s, factor_woat, factor_woab, max_impact_levels, ass_method, &
+         & ass_txty, std_cut_b, std_cut_t, temp_dist, salt_dist, ass_txty_lat_start, ass_txty_lat_end, &
+         & d4ass_txty, txty_dist, depth_cut, e_flder_oer, prf_hyb_d, salt_to_temp, temp_to_salt, &
+         & depth_coast, woa_lat, debug_eakf, obs_inc_sigmat_cut, obs_inc_sigmas_cut, local_tropatl_box, local_tropatl_s2t, &
+         & tropatl_s2t_latn, tropatl_s2t_lats, global_tropatl_s2t, global_tropatl_s2s, global_s2t_latn, global_s2t_lats
+
+    !--- module name and version number ----
+    character(len=*), parameter :: module_name = 'stnf'
+    character(len=*), parameter :: vers_num = 'x00.0'
+
+    !=======================================================================
+    integer :: ass_variable = 1 ! 1 for temperature, 2 for salinity
+    integer :: flag_hyb = 0 ! 0 for hyb scheme, 1 for eakf
+    integer :: ni, nj, nk
+    integer :: stdout_unit
+
+    !=======================================================================
+    integer :: num_prfs_loc_halo
+    integer, dimension(MAX_PROFILES) :: list_loc_halo_prfs
+    integer, dimension(MAX_PROFILES, MAX_LEVELS) :: index_obs
+!!$    integer, dimension(360*200) :: list_close_grids
+    integer, dimension(:), allocatable :: list_close_grids
+
+    !=======================================================================
+    integer :: id_eakf_total
+    integer :: isd_ens, ied_ens, jsd_ens, jed_ens, nprofb, ngrids, nproft
+
+    real :: cutoff_vd, cor_oi, e_flder_aed
+    real :: cov_factor_v, cov_factor_t, cov_factor_h
+
+    integer :: num_close, assim_flag
+    type(loc_type) :: model_loc, obs_loc, model_loc_u
+
+    integer :: ii_ens, jj_ens, kk_ens, nv, T_p_id !lulv add T_p_id
+    integer :: ind_temp_h, ind_temp_l, ind_salt_h, ind_salt_l, ind_u, ind_v, ind_eta
+    integer :: i0, i, j, k, k0, kk, num, blk, i_idx
+    integer :: t_tau, s_tau, u_tau, v_tau, i_uflx, i_vflx, i_eta
+    integer :: i_tflx, i_qflx, i_lwflx, i_swflx
+    integer :: idx_obs, idx_buf, idx_k, lji0, npe, npes, kk0, kk1, kk2
+    integer :: lji, model_size, ens_size
+    integer :: unit, ierr, io, pe_curr, j_ens, i_h, i_v0, kk_bot, nk_adj
+    integer :: m_days, m_hours, m_seconds, o_days, o_hours, o_seconds, hours0
+    integer :: i_o, j_o, k_o, i_og, j_og, k_og, j_o0, k_o0, idx_cor
+    integer, dimension(20) :: ind_unit
+    integer :: lcg_size
+
+    !---------------------------------------------------------------------------
+    real :: obs_value, obs_var_t, obs_var_s, obs_var_t_oi, obs_var_s_oi
+    real :: std_oi, std_oi_o, std_oi_g, std_oi_bt_t, std_oi_bt_s, std_c, std_bg
+    real :: dist, dist0
+    real :: v2_h, v2_l, zfcn, v2_h_stn, v2_l_stn !lulv add v2_h_stn,v2_l_stn
+    real :: depth_bot, std_max, obs_inc_sigma
+    real, dimension(50) :: sgm_tgm
+    !---------------------------------------------------------------------------
+    real :: prf_depth, depth_factor, woa_factor, depth_lat
+    integer :: idx_i0, idx_j0, idx_depth
+
+    !---------------------------------------------------------------------------
+    character(len=40) :: file_name
+    character(len=40) :: diag_file
+
+!if (mpp_pe()==0) print*,"T_ens_stn(1,1)%data(:,:,1)=",T_ens_stn(1,1)%data(:,:,1) !lulv,good
+
+    sgm_tgm = (/.98, .97, .95, .97, .98, 1., 1., 1., .98, .98, .95, .94, .91,&
+         & .86, .83, .80, .77, .75, .72, .72, .69, .67, .66, .64, .61, .58,&
+         & .53, .48, .44, .39, .34, .30, .25, .20, .16, .13, .11, .09, .06,&
+         & .05, .03, .03, .02, .02, .02, .02, .02, .02, .02, .02/)
+
+    stdout_unit = stdout()
+    !---------------------------------------------------------------------------
+    ni = T_grid%ni
+    nj = T_grid%nj
+    nk = T_grid%nk
+
+    std_c = 0.5
+    !---------------------------------------------------------------------------
+    
+    ! Start the clock
+    id_eakf_total = mpp_clock_id('(total eakf computation)')
+!    call mpp_clock_begin(id_eakf_total) !lulv comment
+
+
+!    call mpp_print_memuse_stats('ensemble_filter Before allocate list_close_grids')    
+
+    !---------------------------------------------------------------------------
+    ! Allocate list_close_grids
+    lcg_size = (ied-isd + 2*halox + 1)*(jed-jsd + 2*haloy + 1)
+    allocate(list_close_grids(1:lcg_size), STAT=ierr) 
+    if ( ierr /= 0 ) then
+        CALL error_mesg ('eakf_oda_mod::ens_stn_filter',&
+             & 'Unable to allocate list_close_grids', FATAL)
+    end if
+
+!    call mpp_print_memuse_stats('ensemble_filter after allocate list_close_grids')    
+
+    isd_ens = isd
+    ied_ens = ied
+    jsd_ens = jsd
+    jed_ens = jed
+
+    ens_size = size(temp_ens_tau)
+!    iass = iass + 1 !lulv
+ 
+    npes = mpp_npes()
+    pe_curr = mpp_pe()
+
+    ! Read namelist for run time control
+    if ( file_exist('input.nml') ) then
+       unit = open_namelist_file()
+       read(unit, nml = stnf_nml, iostat=io) !lulv change to stn_nml
+!   read(unit, nml = stnf_nml, iostat=io) !lulv
+       call close_file(unit)
+    else
+       ! Set mystat to an arbitrary positive number if input.nml does not exist.
+       io = 100
+    end if
+
+    if ( check_nml_error(io, 'stnf_nml') < 0 ) then
+       if ( mpp_pe() == mpp_root_pe() ) then
+          call error_mesg('eakf_mod::ens_stn_filter', 'EAKF_NML not found in input.nml.  Using defaults.', WARNING)
+       end if
+    end if
+
+    ! Write the namelist to a log file
+    call write_version_number(vers_num, module_name)
+
+    ! if ( mod(iass,assim_freq) /= 0 ) then
+       ! deallocate(list_close_grids)
+       ! return
+    ! end if !lulv comment 4 lines
+    ! return ! record for ada_only
+
+    if ( nprof > MAX_PROFILES ) nprof = MAX_PROFILES
+
+    blk = (jed_ens-jsd_ens+2*haloy+1)*(ied_ens-isd_ens+2*halox+1)
+
+    !--------------------------------------------------------------------------
+    call init_model(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, nk, ass_method)
+    model_size = get_model_size()
+
+    ! Begin by initializing the observations
+!    call mpp_print_memuse_stats('ensemble_filter Before obs_init')    
+    call obs_init(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, Profiles, nprof,&
+         & MAX_LEVELS, T_grid, list_loc_halo_prfs, num_prfs_loc_halo)
+!lulv T_grid to Grid
+!    call mpp_print_memuse_stats('ensemble_filter After obs_init')    
+
+    if ( .not.module_initialized ) then
+       call eakf_oda_init(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isd, IED=ied, JSD=jsd, JED=jed, NK=nk)
+    end if
+
+    d_g(:) = T_grid%z(:)
+
+    ! Initialize assim tools module
+    call assim_tools_init()
+
+    ! print namelist
+    if ( pe_curr == mpp_root_pe() .and. first_run_call ) then
+       write (stdout_unit, *) 'model size is ', model_size, 'ensemble size is ', ens_size
+       write (stdout_unit, *) 'prf_window is ', prf_window, 'cov_inflate is ', cov_inflate
+       write (stdout_unit, *) 'temp obs standard derivation is ', sigma_o_t
+       write (stdout_unit, *) 'salt obs standard derivation is ', sigma_o_s
+       write (stdout_unit, *) 'weak woa climate top constraint (k*sigma_o_t) k= ', factor_woat
+       write (stdout_unit, *) 'weak woa climate bot constraint (k*sigma_o_s) k= ', factor_woab
+       write (stdout_unit, *) 'cov_factor is ', cov_factor
+       write (stdout_unit, *) 'MAX_LEVELS is ', MAX_LEVELS
+       write (stdout_unit, *) 'max_impact_levels is ', max_impact_levels
+       write (stdout_unit, *) 'assim_freq is ', assim_freq
+       write (stdout_unit, *) 'ass_method is ', ass_method
+       write (stdout_unit, *) 'no of prfs is ', nprof
+       write (stdout_unit, *) 'std_cut_b is', std_cut_b
+       write (stdout_unit, *) 'std_cut_t is', std_cut_t
+       write (stdout_unit, *) 'ass_txty is', ass_txty
+       write (stdout_unit, *) 'temp_dist, salt_dist are', temp_dist, salt_dist
+       write (stdout_unit, *) 'ass_txty_lat_start, ass_txty_lat_end are', ass_txty_lat_start, ass_txty_lat_end
+       write (stdout_unit, *) 'd4ass_txty is', d4ass_txty
+       write (stdout_unit, *) 'txty_dist is', txty_dist
+       write (stdout_unit, *) 'depth_cut is', depth_cut
+       write (stdout_unit, *) 'e_flder_oer is', e_flder_oer
+       write (stdout_unit, *) 'prf_hyb_d is', prf_hyb_d
+       write (stdout_unit, *) 'temp(salt)_to_salt(temp) is', temp_to_salt, salt_to_temp
+       write (stdout_unit, *) 'depth_coast is',depth_coast,'woa_lat is',woa_lat
+
+       ! nprofb = 0
+       do i=1, nprof
+          if ( Profiles(i)%levels > MAX_LEVELS ) then 
+             write (UNIT=stdout_unit, FMT='("for ",I8,"th prf, levels = ",I8)') i, Profiles(i)%levels
+          end if
+       end do
+    end if
+
+    ! store the temp and salt values in corr_t(s)
+!    do j_ens=1, ens_size
+!       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished eakf initialization")') mpp_pe()
+    end if
+
+!lulv add 6 lines below
+! if (itt <= ens_size) then
+  ! T_p_id = itt
+! else
+  ! T_p_id = ens_size
+! end if
+! !if (mpp_pe() ==10)print*,'Tracer.01=',T_prog_ens_tau(1,T_p_id)%data(ied,jsd:jed,1)
+!lulv add 6 lines above
+    ! Form the ensemble state vector: ens(:, :)
+!    call ens_ics(temp_ens_tau, salt_ens_tau, &
+!         & uflx_ens, vflx_ens, &
+!         & isd_ens, ied_ens, jsd_ens, jed_ens, &
+!         & halox, haloy, nk, ens, ass_method)
+    call ens_ics_stn(T_ens_stn, temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens, &
+         & halox, haloy, nk, ens, ensb, ass_method) !lulv
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished ens_ics")') mpp_pe()
+    end if
+
+    ! ###########################################################
+    ! The assimilation main part starts here
+
+    ! Compute the ensemble mean of the initial ensemble before assimilation
+    ens_mean = sum(ens, dim=2) / ens_size
+
+    !go to 1001
+
+!    call mpp_sync_self() !lulv comment
+
+    ! Loop through each observation location available at this time
+    index_obs = 0
+    idx_obs = 0
+    do lji=1, num_prfs_loc_halo
+       lji0 = list_loc_halo_prfs(lji)
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+       do kk=1, k0
+          idx_obs = idx_obs + 1
+          index_obs(lji0,kk) = idx_obs
+       end do
+    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished index_obs")') mpp_pe()
+    end if
+
+!lulv    obs_var_t_oi = (5.0*sigma_o_t)**2
+!lulv    obs_var_s_oi = (5.0*sigma_o_s)**2
+
+    ! Section to do adjustment point by point
+    ! coding for cov_factor
+
+    call get_time(m_time, m_seconds, m_days)
+    m_hours = m_seconds/3600 + m_days * 24
+
+!lulv    ngrids = 0
+
+    !===== Eakf assim start =====================================
+    ! for special handling on corrections in vertical direction
+
+   ! call mpp_sync_self() !lulv comment
+
+!    if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!       print*,'in pe=',mpp_pe(),'num_prfs_loc_halo=', num_prfs_loc_halo,'isc,iec,jsc,jec=',isd_ens, ied_ens, jsd_ens, jed_ens
+!       print*,'in pe=',mpp_pe(),'lon1,lon2=',T_grid%x(isd_ens,jsd_ens),T_grid%x(ied_ens,jed_ens)
+!       print*,'in pe=',mpp_pe(),'lat1,lat2=',T_grid%y(isd_ens,jsd_ens),T_grid%y(ied_ens,jed_ens)
+!    end if
+!print*,'mpp_pe(),num_prfs_loc_halo=',mpp_pe(),num_prfs_loc_halo !lulv 2020-04-08
+!lulv    doloop_9: do lji=1, num_prfs_loc_halo ! (9)
+    doloop_9: do lji=1, num_prfs_loc_halo ! (9)
+       lji0 = list_loc_halo_prfs(lji)
+!lulv print*,'lji,Profiles(lji0)%lon,Profiles(lji0)%lat=',lji,Profiles(lji0)%lon,Profiles(lji0)%lat
+
+       if (Profiles(lji0)%accepted) then ! ifblook prf accepted
+
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+
+! snz add on dec. 17, 2011 to differ the impact radius in coast area
+       idx_i0 = Profiles(lji0)%i_index
+       idx_j0 = Profiles(lji0)%j_index
+!print*,'idx_i0, idx_j0=',idx_i0, idx_j0, T_grid%x(135,96),T_grid%y(135,96) !lulv 2020-04-10
+!print*,'T_grid%y(135,93:99=',T_grid%y(135,93:99) !lulv 2020-04-10
+       idx_depth = sum(T_grid%mask(idx_i0,idx_j0,:))
+       if (idx_depth <= 0 .or. idx_depth > nk) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+         stop
+       end if
+
+       depth_factor = 1.0
+
+       obs_loc%lat = Profiles(lji0)%lat
+       obs_loc%lon = Profiles(lji0)%lon !lulv 2020-04-09
+       if(obs_loc%lon>360)   obs_loc%lon=obs_loc%lon - 360.0 !lulv 2020-04-09
+       if(obs_loc%lon<0)     obs_loc%lon=obs_loc%lon + 360.0 !lulv 2020-04-09
+
+     if ((obs_loc%lat < 10.0 .and. obs_loc%lon > 290.0 .and. obs_loc%lon < 335.0) .or. &
+           (obs_loc%lat >= 10.0 .and. obs_loc%lat <= 20.0 .and. obs_loc%lon > 270.0 .and. obs_loc%lon < 335.0) &
+           .or. (obs_loc%lat > 20.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 335.0)) then ! the west of Atlantic
+       prf_depth = d_g(idx_depth)
+       if (abs(Profiles(lji0)%lat) < 20.0) then
+         if (prf_depth > 2.*depth_coast) then
+           depth_factor = 1.0
+         elseif (prf_depth < 0.2*2.*depth_coast) then
+         depth_factor = 0.2
+         else
+         depth_factor = prf_depth/(2.*depth_coast)
+         end if
+       end if
+       if (abs(Profiles(lji0)%lat) >= 20.0 .and. abs(Profiles(lji0)%lat) <= 40.0) then
+         if (prf_depth > 1.5*depth_coast) then
+           depth_factor = 1.0
+         elseif (prf_depth < 0.2*1.5*depth_coast) then
+           depth_factor = 0.2
+         else
+           depth_factor = prf_depth/(1.5*depth_coast)
+         end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 40.0 .and. abs(Profiles(lji0)%lat) <= 60.0) then
+         if (prf_depth > depth_coast) then
+           depth_factor = 1.0
+         elseif (prf_depth < 0.2*depth_coast) then
+           depth_factor = 0.2
+         else
+           depth_factor = prf_depth/depth_coast
+         end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 60.0) then
+         depth_factor = 1.0
+       end if
+     end if ! the west of Atlantic
+       if (depth_factor < 0.0 .or. depth_factor > 1.0) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": depth_factor = ",e12.6)') mpp_pe(), depth_factor
+         stop
+       end if
+       ! end of snz add on dec. 17, 2011 to differ the impact radius in coast area
+
+       call get_time(Profiles(lji0)%time, o_seconds, o_days)
+       o_hours = o_seconds/3600 + o_days * 24
+
+!if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!   print*,'m_hours,o_hours=',m_hours,o_hours
+!end if
+
+       o_hours = abs(o_hours - m_hours)
+
+!lulv comment      i0 = o_hours/24 + 1
+!       if ( i0 > size(rrt) ) then
+!          call error_mesg('eakf_mod::ensemble_filter', 'i0 greater than the size of rrt', FATAL)
+!       end if
+
+!       cov_factor_t = rrt(i0)
+       if (o_hours < prf_window*24) then
+         cov_factor_t = cos(o_hours/(prf_window*24)*0.5*3.1415926)
+       else
+         cov_factor_t = 0.0
+       end if
+
+       if ( cov_factor_t > 0.0 ) then ! control 10d time window (5+ and 5-) 
+!lulv c          obs_loc%lon = Profiles(lji0)%lon
+          if ( obs_loc%lon < 80.0 ) then ! merge to model setting in oda_core
+             write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+          end if
+!lulv c          if ( obs_loc%lon > 360.0 ) obs_loc%lon = obs_loc%lon-360.0
+!lulv c          obs_loc%lat = Profiles(lji0)%lat
+
+          call get_close_grids(obs_loc, isd_ens, ied_ens, jsd_ens, jed_ens, &
+               & halox, haloy, T_grid, list_close_grids, num_close)
+!lulv          ngrids = ngrids + num_close
+          ens_tmp=ens(:,1);!lulv 2020-04-13
+          doloop_8: do k=1, num_close ! (8)
+             j = list_close_grids(k)
+
+             jj_ens = (j-1)/(ied_ens-isd_ens+2*halox+1)+1 + (jsd_ens-1-haloy)
+             ii_ens = mod(j, ied_ens-isd_ens+2*halox+1)
+             if ( ii_ens == 0 ) ii_ens = ied_ens-isd_ens+2*halox+1
+             ii_ens = ii_ens + (isd_ens-1-halox)
+
+             i_h = (jj_ens-jsd_ens+haloy)*(ied_ens-isd_ens+2*halox+1)+ii_ens-isd_ens+halox+1
+
+!             if ( ii_ens <= 0 ) ii_ens = ii_ens + ni
+!             if ( ii_ens > ni ) ii_ens = ii_ens - ni
+!             if ( jj_ens < 1  ) jj_ens = 1
+!             if ( jj_ens > nj ) jj_ens = nj
+             if ( ii_ens < isd_ens-halox .or. ii_ens > ied_ens+halox ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": ii_ens = ",I8)') mpp_pe(), ii_ens
+             end if
+             if ( jj_ens < jsd_ens-haloy .or. jj_ens > jed_ens+haloy ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": jj_ens = ",I8)') mpp_pe() ,jj_ens
+             end if
+
+             model_loc%lon = T_grid%x(ii_ens, jj_ens)
+             model_loc%lat = T_grid%y(ii_ens, jj_ens)
+             model_loc%lon = model_loc%lon+360.0
+             if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+
+             assim_flag = 1
+
+             ! do not do assim over some islands
+             ! East bound
+!!$             if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 278.0 .and. model_loc%lon < 305.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat >= 17.0 .and. model_loc%lat <= 25.0)&
+!!$                  & .and. (model_loc%lon > 262.0 .and. model_loc%lon <= 278.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat > -27.0 .and. model_loc%lat < -18.0)&
+!!$                  & .and. (model_loc%lon > 300.0 .and. model_loc%lon < 330.0) ) assim_flag = 0
+
+             ! do not do assim over some islands
+             ! West bound
+!!$             if ( (model_loc%lat > -15.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 25.0 .and. model_loc%lon < 100.0) ) assim_flag = 0
+
+             if ( assim_flag /= 0 ) then ! (7)
+                assim_flag = 1
+
+                ! for test of estimate uncertainty of analysis !!!!!!!!
+                
+!!$                if ( (obs_loc%lat > -1.0 .and. obs_loc%lat < 1.0) .and.&
+!!$                     & (obs_loc%lon > 139.0 .and. obs_loc%lon < 141.0) ) assim_flag = 0
+
+                ! do not allow obs to have impact on grids separated by continents
+                ! East bound
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 260.0 .and. model_loc%lon < 280.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 240.0 .and. obs_loc%lon < 260.0) ) assim_flag = 0
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 240.0 .and. model_loc%lon < 260.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 280.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon > 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon < 270.0) ) assim_flag = 0
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon < 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon > 270.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon > 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon < 275.0) ) assim_flag = 0
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon < 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon > 275.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 290.0 .and. model_loc%lon < 360.0 ) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 110.0 .and. obs_loc%lon < 290.0) ) assim_flag = 0
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 110.0 .and. model_loc%lon < 290.0) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 290.0 .and. obs_loc%lon < 360.0) ) assim_flag = 0
+
+                ! west bound
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon > 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon > 100.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon > 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon < 77.0) ) assim_flag = 0
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon < 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon > 77.0) ) assim_flag = 0
+
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon > 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon < 110.0) ) assim_flag = 0
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon < 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon > 110.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 145.0 .and. model_loc%lon < 165.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 125.0 .and. obs_loc%lon < 145.0) ) assim_flag = 0
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 125.0 .and. model_loc%lon < 145.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 145.0 .and. obs_loc%lon < 165.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 0.0 .and. obs_loc%lon < 25.0) ) assim_flag = 0
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 0.0 .and. model_loc%lon < 25.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. obs_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+
+                ifblock_6: if ( assim_flag /= 0 ) then ! (6)
+                   dist = get_dist(model_loc, obs_loc)
+                   dist = RADIUS * sqrt(dist)
+
+                   cov_factor = cov_factor_t 
+
+!!$                   ifblock_5: if ( cov_factor > 0.0 ) then ! (5) redundent with cov_factor_t >0 !!
+
+                      ifblock_4_4: if ( Profiles(lji0)%variable == TEMP_ID .or. &
+                           & Profiles(lji0)%variable == SALT_ID .or. &
+                           & Profiles(lji0)%variable == WOAT_ID .or. &
+                           & Profiles(lji0)%variable == WOAS_ID ) then ! T,S -> T,S (4.4)
+                         kk_bot = Profiles(lji0)%k_index(k0)
+                         depth_bot = Profiles(lji0)%depth(k0)
+                         doloop_4: do kk = 1, k0 ! (4)
+                            if ( Profiles(lji0)%flag(kk) ) then ! add each level flag
+                               idx_obs = index_obs(lji0,kk)
+                               if (idx_obs == 0 ) then 
+                                  write (UNIT=stdout_unit, FMT='("lji0 = ",I8)') lji0
+                               end if
+
+                               do j_ens=1, ens_size
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  v2_h_stn = 0.0 !lulv
+                                  v2_l_stn = 0.0 !lulv
+                                  if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                       & Profiles(lji0)%variable == WOAT_ID ) then
+                                     do i_idx=1, 4
+                                        ind_temp_h = obs_def(idx_obs)%state_var_index(i_idx)
+                                        ind_temp_l = obs_def(idx_obs)%state_var_index(i_idx+4)
+                                        v2_h = v2_h + ens_tmp(ind_temp_h)*obs_def(idx_obs)%coef(i_idx) !lulv 2020-04-13
+                                        v2_l = v2_l + ens_tmp(ind_temp_l)*obs_def(idx_obs)%coef(i_idx) !lulv 2020-04-13
+                                        v2_h_stn = v2_h_stn + ensb(ind_temp_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                        v2_l_stn = v2_l_stn + ensb(ind_temp_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                     end do
+                                     enso_temp(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                     enso_temp_stn(j_ens) = v2_h_stn*obs_def(idx_obs)%coef(5) + v2_l_stn*obs_def(idx_obs)%coef(6) !lulv
+                                  end if
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  v2_h_stn = 0.0 !lulv
+                                  v2_l_stn = 0.0 !lulv
+                                  if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                       & Profiles(lji0)%variable == WOAS_ID ) then
+                                     do i_idx=1, 4
+                                        ind_salt_h = obs_def(idx_obs)%state_var_index(i_idx)+nk*blk
+                                        ind_salt_l = obs_def(idx_obs)%state_var_index(i_idx+4)+nk*blk
+                                        v2_h = v2_h + ens_tmp(ind_salt_h)*obs_def(idx_obs)%coef(i_idx) !chenyuhu find it's missing
+                                        v2_l = v2_l + ens_tmp(ind_salt_l)*obs_def(idx_obs)%coef(i_idx) !chenyuhu find it's missing
+                                        v2_h_stn = v2_h_stn + ensb(ind_salt_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                        v2_l_stn = v2_l_stn + ensb(ind_salt_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                     end do
+                                     enso_salt(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                     enso_salt_stn(j_ens) = v2_h_stn*obs_def(idx_obs)%coef(5) + v2_l_stn*obs_def(idx_obs)%coef(6) !lulv
+                                  end if
+                               end do
+
+                               if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                    & Profiles(lji0)%variable == WOAT_ID ) then
+                                  if ( Profiles(lji0)%variable == TEMP_ID ) then
+                                     obs_var_t = sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAT_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology                                  
+
+                                    obs_var_t = woa_factor*sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index
+                                  j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_t = obs_var_t * obs_var_t
+                                  obs_var_t_oi = 25.0*obs_var_t
+                                  std_bg = 0.0
+                                  ! call obs_increment_prf_eta_hyb(enso_temp, ens_size, obs_value, obs_var_t,&
+                                       ! & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_bg)
+                                  call obs_increment_prf_eta_hyb_stn(enso_temp_stn, enso_temp, ens_size, obs_value, obs_var_t,&
+                                       & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_bg) !lulv
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_temp(:)*obs_inc_eakf_temp(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmat_cut) then
+                                     obs_inc_eakf_temp(:) = obs_inc_sigmat_cut/obs_inc_sigma*obs_inc_eakf_temp(:)
+                                  end if
+                                  
+!if ((model_loc%lon > 299.0 .and. model_loc%lon < 300.0) .and. (model_loc%lat > 37.0 .and. model_loc%lat < 38.0)) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_temp=',enso_temp,'obs_inc_eakf_temp=',obs_inc_eakf_temp,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+
+                               if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                    & Profiles(lji0)%variable == WOAS_ID ) then
+                                  if (Profiles(lji0)%variable == SALT_ID) then
+                                     obs_var_s = sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAS_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology
+
+                                    obs_var_s = woa_factor*sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index; j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_s = obs_var_s * obs_var_s
+                                  obs_var_s_oi = 25.0*obs_var_s
+                                  std_bg = 0.0
+                                  ! call obs_increment_prf_eta_hyb(enso_salt, ens_size, obs_value, obs_var_s,&
+                                       ! & obs_inc_eakf_salt, obs_var_s_oi, obs_inc_oi_salt, std_bg)
+                                  call obs_increment_prf_eta_hyb_stn(enso_salt_stn, enso_salt, ens_size, obs_value, obs_var_s,&
+                                       & obs_inc_eakf_salt, obs_var_s_oi, obs_inc_oi_salt, std_bg) !lulv
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_salt(:)*obs_inc_eakf_salt(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmas_cut) then
+                                     obs_inc_eakf_salt(:) = obs_inc_sigmas_cut/obs_inc_sigma*obs_inc_eakf_salt(:)
+                                  end if
+!if (abs(sum(obs_inc_eakf_salt(:))/ens_size) > 2.0) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_salt=',enso_salt,'obs_inc_eakf_salt=',obs_inc_eakf_salt,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+  
+                               kk0 = Profiles(lji0)%k_index(kk)
+
+                               if ( kk0 <= 1 ) then
+                                  kk1 = 1
+                                  kk2 = kk1 + max_impact_levels
+                                  cutoff_vd = d_g(2) - d_g(1)
+                               else if ( kk0 < kk_bot ) then
+                                  kk1 = kk0 - max_impact_levels + 1
+                                  kk2 = kk0 + max_impact_levels
+                                  cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                               else ! (for kk0=kk_bot)
+                                  if ( depth_bot <= 500.0 ) then
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     kk2 = kk0 + max_impact_levels
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  else ! (for kk0=kk_bot) .and. (depth_bot > 500.0)
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     if ( (kk0+5*max_impact_levels) <= nk ) then ! extend 10 lvls
+                                        kk2 = kk0 + 4*max_impact_levels
+                                     else
+                                        kk2 = nk
+                                     end if
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  end if
+                               end if
+
+                               std_max = sgm_tgm(1)
+                               do k_o0=2, nk
+                                  if ( std_max < sgm_tgm(k_o0) ) std_max= sgm_tgm(k_o0)
+                               end do
+                               if ( std_max > 0.0 ) sgm_tgm(:) = sgm_tgm(:)/std_max
+
+                               ens_inc_bt_t = 0.0
+                               ens_inc_bt_s = 0.0
+
+                               doloop_3: do kk_ens=kk1, kk2 ! (3)
+                                  t_tau   = (kk_ens-1)*blk + i_h
+                                  s_tau   = nk*blk + t_tau
+
+                                  ifblock_2: if ( ens_mean(t_tau) /= 0.0 ) then ! (2) using ens_mean(t_tau) as mask
+                                     if ( kk_ens <= kk0+max_impact_levels ) then
+                                        cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                             & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                     else ! for deeper than kk_bot+max_impact_levels
+                                        cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                             & d_g(kk0+max_impact_levels)), &
+                                             & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                     end if
+
+                                     cov_factor = cov_factor_v * cov_factor_t
+
+                                     ifblock_1: if ( cov_factor > 0.0 .and. &
+                                          Profiles(lji0)%depth(kk) <= depth_cut ) then ! (1)  
+                                        ifblock_0_60: if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                             & Profiles(lji0)%variable == WOAT_ID ) then ! (0.60)
+                                           ! using temperature adjusts temperature and salinity
+                                           ! temperature itself
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = temp_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = temp_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+
+                    if ( local_tropatl_box ) then
+                       if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                       end if
+                    end if 
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc(:) = 0.0
+
+                                           ifblock_0_60_1: if ( sum(ens(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = mpp_pe()*k*kk
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+!print*,'ii_ens,jj_ens=',ii_ens,jj_ens !lulv 2020-04-11
+                                                 call update_from_obs_inc_prf_hyb(enso_temp_stn,&  !chenyuhu change enso_temp to enso_temp_stn
+                                                      & obs_inc_eakf_temp, obs_inc_oi_temp, ensb(t_tau, :),& !chenyuhu change ens to ensb
+                                                      & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+!if(ii_ens==135 .and. (jj_ens>=93 .and. jj_ens<=100)) then
+!  print*,'mpp_pe,jj_ens,obs_inc_eakf_temp,ens_inc=',mpp_pe(),jj_ens,obs_inc_eakf_temp(1),ens_inc(1) !lulv 2020-04-09
+!endif
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                    !ens_bt_t(:) = ens(t_tau, :)
+                                                    !ens_bt_t(:) = enso_temp_stn(:) !chenyuhu
+                                                    ens_bt_t(:) = ensb(t_tau,:) !lulv 20201123
+                                                    ens_inc_bt_t(:) = ens_inc(:)
+                                                    std_oi_bt_t = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_t, ens_inc_bt_t,&
+                                                    !chenyuhu  & ens(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & ensb(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & std_oi_bt_t, std_oi_g)
+                                                 ens(t_tau, :) = ens(t_tau, :) + ens_inc(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              doloop_0: do j_ens=1,1 !lulv 20201125 ens_size ! (0)
+                                                 if ( ens(t_tau, j_ens) > 39.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                    ens(t_tau, j_ens) = 39.0
+                                                 end if
+                                                 if ( ens(t_tau, j_ens) < -4.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F25.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                    ens(t_tau, j_ens) = -4.0
+                                                 end if
+                                              end do doloop_0 ! handle the extremeties (0)
+                                           end if ifblock_0_60_1
+
+                                           ! temperature impact salinity
+                                           ifblock_0_50: if ( temp_to_salt ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                          if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+!                       if ( local_tropatl_ts ) then
+!                          if ( (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon >280.0 ) &
+!                             & .or. (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+!                              dist = 2.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+!                         end if
+!                       end if
+
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc(:) = 0.0
+
+                                              ifblock_0_50_1: if ( sum(ens(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_temp_stn,& !chenyuhu change enso_temp to enso_temp_stn
+                                                         & obs_inc_eakf_temp, obs_inc_oi_temp, ensb(s_tau, :),& !chenyuhu change ens to ensb
+                                                         & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                     !chenyuhu  ens_bt_s(:) = ens(s_tau, :)
+                                                       !ens_bt_s(:) = enso_temp_stn(:)
+                                                       ens_bt_s(:) = ensb(s_tau,:) !lulv 20201123
+                                                       ens_inc_bt_s(:) = ens_inc(:)
+                                                       std_oi_bt_s = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_s, ens_inc_bt_s,&
+                                                       !chenyuhu  ens(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         ensb(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & std_oi_bt_s, std_oi_g)
+                                                    ens(s_tau, :) = ens(s_tau, :) + ens_inc(:)
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 doloop_00: do j_ens = 1,1 !lulv 20201125 ens_size ! (0)
+                                                    if ( ens(s_tau, j_ens) > 44.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)') &
+                                                            & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                       ens(s_tau, j_ens) = 44.0
+                                                    end if
+
+                                                    if ( ens(s_tau, j_ens) < 0.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                       ens(s_tau, j_ens) = 0.0
+                                                    end if
+                                                 end do doloop_00 ! handle the extremeties (0)
+                                              end if ifblock_0_50_1
+                                           end if ifblock_0_50 ! impact salinity or not (0.5)
+
+                                        end if ifblock_0_60 ! finish processing temperature profiles (0.60)
+
+                                        ifblock_0_61: if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                             & Profiles(lji0)%variable == WOAS_ID ) then ! (0.61)
+                                           ! using salinity adjusts salinity and temperature
+                                           ! salinity itself
+                                           if ( kk_ens <= kk0+max_impact_levels ) then
+                                              cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                                   & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                           else ! for deeper than kk_bot+max_impact_levels
+                                              cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                                   & d_g(kk0+max_impact_levels)), &
+                                                   & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                           end if
+
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+                       if ( local_tropatl_box ) then
+                        if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+
+                      if ( global_tropatl_s2s ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc(:) = 0.0
+                                           ifblock_0_61_1: if ( sum(ens(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = 1
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                 call update_from_obs_inc_prf_hyb(enso_salt_stn,& !chenyuhu change enso_salt to enso_salt_stn
+                                                      & obs_inc_eakf_salt, obs_inc_oi_salt, ensb(s_tau, :),& !chenyuhu change ens to ensb
+                                                      & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                  !chenyuhu  ens_bt_s(:) = ens(s_tau, :)
+                                                    !ens_bt_s(:) = enso_salt_stn(:)
+                                                    ens_bt_s(:) = ensb(s_tau,:) !lulv 20201123
+                                                    ens_inc_bt_s(:) = ens_inc(:)
+                                                    std_oi_bt_s = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_s, ens_inc_bt_s,&
+                                                   !chenyuhu   & ens(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & ensb(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & std_oi_bt_s, std_oi_g)
+                                                 ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              do j_ens = 1,1 !lulv 20201125 ens_size ! (0)
+                                                 if ( ens(s_tau, j_ens) > 44.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                    ens(s_tau, j_ens) = 44.0
+                                                 end if
+                                                 if ( ens(s_tau, j_ens) < 0.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                    ens(s_tau, j_ens) = 0.0
+                                                 end if
+                                              end do ! handle the extremeties (0)
+                                           end if ifblock_0_61_1
+
+                                           ! salinity impact temperature
+                                           ifblock_0_5: if ( salt_to_temp ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                         if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+                      if ( local_tropatl_s2t ) then
+                       if ( (obs_loc%lat < tropatl_s2t_latn .and. obs_loc%lat > tropatl_s2t_lats .and. obs_loc%lon >280.0 ) &
+                         & .or. (obs_loc%lat < tropatl_s2t_latn  .and. obs_loc%lat > tropatl_s2t_lats  .and. obs_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+                           dist = 3.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+                        end if
+                      end if
+                     if ( global_tropatl_s2t ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc(:) = 0.0
+                                              ifblock_0_5_1: if ( sum(ens(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_salt_stn,& !chenyuhu change enso_salt to enso_salt_stn
+                                                         & obs_inc_eakf_salt, obs_inc_oi_salt, ensb(t_tau, :),& !chenyuhu change ens to ensb
+                                                         & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                     !chenyuhu  ens_bt_t(:) = ens(t_tau, :)
+                                                       !ens_bt_t(:) = enso_salt_stn(:)
+                                                       ens_bt_t(:) = ensb(t_tau,:) !lulv 20201123
+                                                       ens_inc_bt_t(:) = ens_inc(:)
+                                                       std_oi_bt_t = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_t, ens_inc_bt_t,&
+                                                      !chenyuhu   & ens(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & ensb(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & std_oi_bt_t, std_oi_g)
+                                                    ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 do j_ens = 1,1 !lulv 20201125 ens_size ! (0)
+                                                    if ( ens(t_tau, j_ens) > 39.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                       ens(t_tau, j_ens) = 39.0
+                                                    end if
+                                                    if(ens(t_tau, j_ens) < -4.0) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                       ens(t_tau, j_ens) = -4.0
+                                                    end if
+                                                 end do ! handle the extremeties (0)
+                                              end if ifblock_0_5_1
+                                           end if ifblock_0_5 ! impact temperature or not (0.5)
+
+                                        end if ifblock_0_61 ! finish processing slinity profiles (0.61)
+
+                                     end if ifblock_1 ! only use obs which has cov_factor > 0.0 (1)
+                                  end if ifblock_2 ! only do non-masked points (2)
+                               end do doloop_3 ! finish adjustments for related model levels (3)
+
+                               if ( Profiles(lji0)%depth(kk) < d4ass_txty .and. &
+                                    & (model_loc%lat > ass_txty_lat_start .and. &
+                                    & model_loc%lat < ass_txty_lat_end) ) then ! lat and depth
+                                  if ( ens_mean(i_h) /= 0.0 ) then ! ens_mean = 0.0
+                                     dist0 = txty_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                     cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                          & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                     cov_factor_v = comp_cov_factor(Profiles(lji0)%depth(kk), d4ass_txty)
+                                     cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                     ass_variable = 2
+
+                                     if ( Profiles(lji0)%variable == TEMP_ID ) then ! TEMP_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                                   & obs_inc_oi_temp, ens(i_uflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_uflx, :) = ens(i_uflx, :) + ens_inc(:)
+                                           end if
+
+                                           ens_inc(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                                   & obs_inc_oi_temp, ens(i_vflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_vflx, :) = ens(i_vflx, :) + ens_inc(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! TEMP_ID
+
+                                     if ( Profiles(lji0)%variable == SALT_ID ) then ! SALT_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt, obs_inc_eakf_salt,&
+                                                   & obs_inc_oi_salt, ens(i_uflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_uflx, :) = ens(i_uflx, :) + ens_inc(:)
+                                           end if
+
+                                           ens_inc(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt, obs_inc_eakf_salt,&
+                                                   & obs_inc_oi_salt, ens(i_vflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_vflx, :) = ens(i_vflx, :) + ens_inc(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! SALT_ID
+                                  end if ! ens_mean=0.0
+                               end if ! lat and depth
+                            end if ! add each level flag
+                         end do doloop_4 ! go through one profile column (4)
+                      end if ifblock_4_4 ! T,S -> T,S,U,V,tx,ty; ETA -> T,S,U,V (4.4)
+!!$                   end if ifblock_5 ! only adjust points that have a positive cov_factor (d&t) (5)
+                end if ifblock_6 ! get rid of land points (6)
+             end if ! get rid of obs crossing the basin bound (optional) (7)
+          end do doloop_8 ! finish the adjustments for all related model columns (8)
+       end if ! control 10d time window (5+ & 5-)
+       ! if (ngrids == 0) print*,'ngrids=',ngrids,'in pe=',mpp_pe()
+
+       end if ! ifblock prf accepted
+
+    end do doloop_9 ! finish all profiles (9)
+
+    !===== Eakf assim finish =====================================
+
+    ! Compute ensemble mean of current assimilated state
+    !
+    ! Redistribute the sub ensemble state vector ens(:, :) back to the model grids
+    ! in the local-domain.
+    call red_ens(temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens,&
+         & halox, haloy, nk, ens, ass_method)
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished red_ens")') mpp_pe()
+    end if
+
+!!$    ! store the adj amount in corr_t(s)
+!!$    do j_ens=1, ens_size
+!!$       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$    end do
+!!$    ! extend the adj amount to the deep water
+!!$    do j_ens=1, ens_size
+!!$       do j=jsd, jed
+!!$          do i=isd, ied
+!!$             obs_only: do k = 3, nk ! how about obs only ssh?
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) == 0.0 ) exit obs_only
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) /= 0.0 ) then
+!!$                   write (UNIT=stdout_unit, FMT='("corr_t(",I8,")%data(",3I5,") = ",F15.8)')&
+!!$                        & j_ens, i, j, k, corr_t(j_ens)%data(i,j,k)
+!!$                   write (UNIT=stdout_unit, FMT='("corr_s(",I8,")%data(",3I5,") = ",F25.8)')&
+!!$                        & j_ens, i, j, k, corr_s(j_ens)%data(i,j,k)
+!!$                end if
+!!$             end do obs_only
+!!$             nk_adj = k-1
+!!$             if ( d_g(nk_adj) <= 200.0 ) e_flder_aed = 20.0
+!!$             if ( d_g(nk_adj) > 200.0 .and. d_g(nk_adj) <= 500.0 ) e_flder_aed = 50.0
+!!$             if ( d_g(nk_adj) > 500.0 .and. d_g(nk_adj) <= 1000.0 ) e_flder_aed = 200.0
+!!$             if ( d_g(nk_adj) > 1000.0 ) e_flder_aed = 500.0
+!!$             do k=nk_adj+1, nk
+!!$                zfcn = exp(-(d_g(k)-d_g(nk_adj))/e_flder_aed)
+!!$                temp_ens_tau(j_ens)%data(i,j,k) = temp_ens_tau(j_ens)%data(i,j,k) + corr_t(j_ens)%data(i,j,nk_adj)*zfcn
+!!$                salt_ens_tau(j_ens)%data(i,j,k) = salt_ens_tau(j_ens)%data(i,j,k) + corr_s(j_ens)%data(i,j,nk_adj)*zfcn
+!!$             end do
+!!$          end do
+!!$       end do
+!!$    end do
+
+    call obs_end()
+
+    first_run_call = .false.
+    deallocate(list_close_grids)
+!    call mpp_clock_end(id_eakf_total)
+  end subroutine ens_stn_filter !lulv
+
+  subroutine ens_lfq_filter(T_ens_lfq, temp_ens_tau, salt_ens_tau, uflx_ens, vflx_ens, &
+       & Profiles, nprof, isd, ied, jsd, jed, halox, haloy, T_grid, itt, m_time) !lulv
+    type(field_type), dimension(:), intent(inout) :: temp_ens_tau, salt_ens_tau
+    type(field_type), dimension(:), intent(inout) :: uflx_ens, vflx_ens
+    type(field_type), dimension(:,:), intent(inout) :: T_ens_lfq !lulv
+    type(ocean_profile_type), dimension(:), intent(in) :: Profiles
+    type(grid_type), intent(in) :: T_grid
+    type(time_type), intent(in) :: m_time
+    integer, intent(inout) :: nprof
+    integer, intent(in) :: isd, ied, jsd, jed, halox, haloy
+!    integer, intent(inout) :: iass
+    integer, intent(in) :: itt !lulv
+    !---- namelist with default values
+    real :: cov_inflate = 1.0
+    real :: prf_window = 10.0 ! in days
+    real :: sigma_o_t = 1.0
+    real :: sigma_o_s = 1.0
+    real :: factor_woat = 100.0
+    real :: factor_woab = 25.0
+    real :: cov_factor = 0.0
+    real :: cutoff_v = 10.0
+    real :: std_cut_b = 0.031623
+    real :: std_cut_t = 1.00
+    real :: temp_dist = 1000.0e3
+    real :: salt_dist = 500.0e3
+    real :: txty_dist = 500.0e3
+    real :: prf_hyb_d = 500.0e3
+
+    integer :: max_impact_levels = 7
+    integer :: assim_freq = 1
+    integer :: ass_method = 1 ! 0 for snz-oi, 1 for eakf inv, 2 for eakf multv
+
+    logical :: add_on = .false.
+    logical :: ass_uv = .false.
+    logical :: ass_txty = .false.
+    logical :: salt_to_temp = .false.
+    logical :: temp_to_salt = .false.
+    logical :: debug_eakf = .false.
+    logical :: local_tropatl_box = .false.
+    logical :: local_tropatl_s2t = .false.
+    logical :: global_tropatl_s2t = .false.
+    logical :: global_tropatl_s2s = .false.
+
+    real :: ass_txty_lat_start = -20.0
+    real :: ass_txty_lat_end = 20.0
+    real :: d4ass_txty = 200.0 
+    real :: depth_cut = 500.0
+    real :: e_flder_oer = 2000.0
+    real :: woa_lat = 30.0 ! woa_lat >= 20.0
+    real :: depth_coast = 1000.0
+    real :: obs_inc_sigmat_cut = 2.0
+    real :: obs_inc_sigmas_cut = 1.0
+    real :: tropatl_s2t_latn = 20.0
+    real :: tropatl_s2t_lats = -10.0
+    real :: global_s2t_latn = 20.0
+    real :: global_s2t_lats = -10.0
+
+    namelist /lfqf_nml/prf_window,sigma_o_t, sigma_o_s, factor_woat, factor_woab, max_impact_levels, ass_method, &
+         & ass_txty, std_cut_b, std_cut_t, temp_dist, salt_dist, ass_txty_lat_start, ass_txty_lat_end, &
+         & d4ass_txty, txty_dist, depth_cut, e_flder_oer, prf_hyb_d, salt_to_temp, temp_to_salt, &
+         & depth_coast, woa_lat, debug_eakf, obs_inc_sigmat_cut, obs_inc_sigmas_cut, local_tropatl_box, local_tropatl_s2t, &
+         & tropatl_s2t_latn, tropatl_s2t_lats, global_tropatl_s2t, global_tropatl_s2s, global_s2t_latn, global_s2t_lats
+
+    !--- module name and version number ----
+    character(len=*), parameter :: module_name = 'lfqf'
+    character(len=*), parameter :: vers_num = 'x00.0'
+
+    !=======================================================================
+    integer :: ass_variable = 1 ! 1 for temperature, 2 for salinity
+    integer :: flag_hyb = 0 ! 0 for hyb scheme, 1 for eakf
+    integer :: ni, nj, nk
+    integer :: stdout_unit
+
+    !=======================================================================
+    integer :: num_prfs_loc_halo
+    integer, dimension(MAX_PROFILES) :: list_loc_halo_prfs
+    integer, dimension(MAX_PROFILES, MAX_LEVELS) :: index_obs
+!!$    integer, dimension(360*200) :: list_close_grids
+    integer, dimension(:), allocatable :: list_close_grids
+
+    !=======================================================================
+    integer :: id_eakf_total
+    integer :: isd_ens, ied_ens, jsd_ens, jed_ens, nprofb, ngrids, nproft
+
+    real :: cutoff_vd, cor_oi, e_flder_aed
+    real :: cov_factor_v, cov_factor_t, cov_factor_h
+
+    integer :: num_close, assim_flag
+    type(loc_type) :: model_loc, obs_loc, model_loc_u
+
+    integer :: ii_ens, jj_ens, kk_ens, nv, T_p_id !lulv add T_p_id
+    integer :: ind_temp_h, ind_temp_l, ind_salt_h, ind_salt_l, ind_u, ind_v, ind_eta
+    integer :: i0, i, j, k, k0, kk, num, blk, i_idx
+    integer :: t_tau, s_tau, u_tau, v_tau, i_uflx, i_vflx, i_eta
+    integer :: i_tflx, i_qflx, i_lwflx, i_swflx
+    integer :: idx_obs, idx_buf, idx_k, lji0, npe, npes, kk0, kk1, kk2
+    integer :: lji, model_size, ens_size
+    integer :: unit, ierr, io, pe_curr, j_ens, i_h, i_v0, kk_bot, nk_adj
+    integer :: m_days, m_hours, m_seconds, o_days, o_hours, o_seconds, hours0
+    integer :: i_o, j_o, k_o, i_og, j_og, k_og, j_o0, k_o0, idx_cor
+    integer, dimension(20) :: ind_unit
+    integer :: lcg_size
+
+    !---------------------------------------------------------------------------
+    real :: obs_value, obs_var_t, obs_var_s, obs_var_t_oi, obs_var_s_oi
+    real :: std_oi, std_oi_o, std_oi_g, std_oi_bt_t, std_oi_bt_s, std_c, std_bg
+    real :: dist, dist0
+    real :: v2_h, v2_l, zfcn, v2_h_lfq, v2_l_lfq !lulv add v2_h_lfq,v2_l_lfq
+    real :: depth_bot, std_max, obs_inc_sigma
+    real, dimension(50) :: sgm_tgm
+    !---------------------------------------------------------------------------
+    real :: prf_depth, depth_factor, woa_factor, depth_lat
+    integer :: idx_i0, idx_j0, idx_depth
+
+    !---------------------------------------------------------------------------
+    character(len=40) :: file_name
+    character(len=40) :: diag_file
+
+    sgm_tgm = (/.98, .97, .95, .97, .98, 1., 1., 1., .98, .98, .95, .94, .91,&
+         & .86, .83, .80, .77, .75, .72, .72, .69, .67, .66, .64, .61, .58,&
+         & .53, .48, .44, .39, .34, .30, .25, .20, .16, .13, .11, .09, .06,&
+         & .05, .03, .03, .02, .02, .02, .02, .02, .02, .02, .02/)
+
+    stdout_unit = stdout()
+    !---------------------------------------------------------------------------
+    ni = T_grid%ni
+    nj = T_grid%nj
+    nk = T_grid%nk
+
+    std_c = 0.5
+    !---------------------------------------------------------------------------
+    
+    ! Start the clock
+    id_eakf_total = mpp_clock_id('(total eakf computation)')
+!    call mpp_clock_begin(id_eakf_total)
+
+
+!    call mpp_print_memuse_stats('ensemble_filter Before allocate list_close_grids')    
+
+    !---------------------------------------------------------------------------
+    ! Allocate list_close_grids
+    lcg_size = (ied-isd + 2*halox + 1)*(jed-jsd + 2*haloy + 1)
+    allocate(list_close_grids(1:lcg_size), STAT=ierr) !lulv comment 5 lines
+    if ( ierr /= 0 ) then
+        CALL error_mesg ('eakf_oda_mod::ens_lfq_filter',&
+             & 'Unable to allocate list_close_grids', FATAL)
+    end if
+
+!    call mpp_print_memuse_stats('ensemble_filter after allocate list_close_grids')    
+
+    isd_ens = isd
+    ied_ens = ied
+    jsd_ens = jsd
+    jed_ens = jed
+
+    ens_size = size(temp_ens_tau)
+!    iass = iass + 1 !lulv
+ 
+    npes = mpp_npes()
+    pe_curr = mpp_pe()
+
+    ! Read namelist for run time control
+    if ( file_exist('input.nml') ) then
+       unit = open_namelist_file()
+       read(unit, nml = lfqf_nml, iostat=io)
+       call close_file(unit)
+    else
+       ! Set mystat to an arbitrary positive number if input.nml does not exist.
+       io = 100
+    end if
+
+    if ( check_nml_error(io, 'lfqf_nml') < 0 ) then
+       if ( mpp_pe() == mpp_root_pe() ) then
+          call error_mesg('eakf_mod::ens_lfq_filter', 'EAKF_NML not found in input.nml.  Using defaults.', WARNING)
+       end if
+    end if
+
+    ! Write the namelist to a log file
+    call write_version_number(vers_num, module_name)
+
+    ! if ( mod(iass,assim_freq) /= 0 ) then
+       ! deallocate(list_close_grids)
+       ! return
+    ! end if !lulv comment 4 lines
+    ! return ! record for ada_only
+
+    if ( nprof > MAX_PROFILES ) nprof = MAX_PROFILES
+
+    blk = (jed_ens-jsd_ens+2*haloy+1)*(ied_ens-isd_ens+2*halox+1)
+
+    !--------------------------------------------------------------------------
+    call init_model(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, nk, ass_method)
+    model_size = get_model_size()
+
+    ! Begin by initializing the observations
+!    call mpp_print_memuse_stats('ensemble_filter Before obs_init')    
+    call obs_init(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, Profiles, nprof,&
+         & MAX_LEVELS, T_grid, list_loc_halo_prfs, num_prfs_loc_halo)
+
+!    call mpp_print_memuse_stats('ensemble_filter After obs_init')    
+
+    if ( .not.module_initialized ) then
+       call eakf_oda_init(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isd, IED=ied, JSD=jsd, JED=jed, NK=nk)
+    end if
+
+    d_g(:) = T_grid%z(:)
+
+    ! Initialize assim tools module
+    call assim_tools_init()
+
+    ! print namelist
+    if ( pe_curr == mpp_root_pe() .and. first_run_call ) then
+       write (stdout_unit, *) 'model size is ', model_size, 'ensemble size is ', ens_size
+       write (stdout_unit, *) 'prf_window is ', prf_window, 'cov_inflate is ', cov_inflate
+       write (stdout_unit, *) 'temp obs standard derivation is ', sigma_o_t
+       write (stdout_unit, *) 'salt obs standard derivation is ', sigma_o_s
+       write (stdout_unit, *) 'weak woa climate top constraint (k*sigma_o_t) k= ', factor_woat
+       write (stdout_unit, *) 'weak woa climate bot constraint (k*sigma_o_s) k= ', factor_woab
+       write (stdout_unit, *) 'cov_factor is ', cov_factor
+       write (stdout_unit, *) 'MAX_LEVELS is ', MAX_LEVELS
+       write (stdout_unit, *) 'max_impact_levels is ', max_impact_levels
+       write (stdout_unit, *) 'assim_freq is ', assim_freq
+       write (stdout_unit, *) 'ass_method is ', ass_method
+       write (stdout_unit, *) 'no of prfs is ', nprof
+       write (stdout_unit, *) 'std_cut_b is', std_cut_b
+       write (stdout_unit, *) 'std_cut_t is', std_cut_t
+       write (stdout_unit, *) 'ass_txty is', ass_txty
+       write (stdout_unit, *) 'temp_dist, salt_dist are', temp_dist, salt_dist
+       write (stdout_unit, *) 'ass_txty_lat_start, ass_txty_lat_end are', ass_txty_lat_start, ass_txty_lat_end
+       write (stdout_unit, *) 'd4ass_txty is', d4ass_txty
+       write (stdout_unit, *) 'txty_dist is', txty_dist
+       write (stdout_unit, *) 'depth_cut is', depth_cut
+       write (stdout_unit, *) 'e_flder_oer is', e_flder_oer
+       write (stdout_unit, *) 'prf_hyb_d is', prf_hyb_d
+       write (stdout_unit, *) 'temp(salt)_to_salt(temp) is', temp_to_salt, salt_to_temp
+       write (stdout_unit, *) 'depth_coast is',depth_coast,'woa_lat is',woa_lat
+
+       ! nprofb = 0
+       do i=1, nprof
+          if ( Profiles(i)%levels > MAX_LEVELS ) then 
+             write (UNIT=stdout_unit, FMT='("for ",I8,"th prf, levels = ",I8)') i, Profiles(i)%levels
+          end if
+       end do
+    end if
+
+    ! store the temp and salt values in corr_t(s)
+!    do j_ens=1, ens_size
+!       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished eakf initialization")') mpp_pe()
+    end if
+
+!lulv add 6 lines below
+! if (itt <= ens_size) then
+  ! T_p_id = itt
+! else
+  ! T_p_id = ens_size
+! end if
+! !if (mpp_pe() ==10)print*,'Tracer.01=',T_prog_ens_tau(1,T_p_id)%data(ied,jsd:jed,1)
+!lulv add 6 lines above
+    ! Form the ensemble state vector: ens(:, :)
+!    call ens_ics(temp_ens_tau, salt_ens_tau, &
+!         & uflx_ens, vflx_ens, &
+!         & isd_ens, ied_ens, jsd_ens, jed_ens, &
+!         & halox, haloy, nk, ens, ass_method)
+    call ens_ics_stn(T_ens_lfq, temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens, &
+         & halox, haloy, nk, ens, ensb, ass_method) !lulv
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished ens_ics")') mpp_pe()
+    end if
+
+    ! ###########################################################
+    ! The assimilation main part starts here
+
+    ! Compute the ensemble mean of the initial ensemble before assimilation
+    ens_mean = sum(ens, dim=2) / ens_size
+
+    !go to 1001
+
+    !call mpp_sync_self() !lulv comment
+
+    ! Loop through each observation location available at this time
+    index_obs = 0
+    idx_obs = 0
+    do lji=1, num_prfs_loc_halo
+       lji0 = list_loc_halo_prfs(lji)
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+       do kk=1, k0
+          idx_obs = idx_obs + 1
+          index_obs(lji0,kk) = idx_obs
+       end do
+    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished index_obs")') mpp_pe()
+    end if
+
+    obs_var_t_oi = (5.0*sigma_o_t)**2
+    obs_var_s_oi = (5.0*sigma_o_s)**2
+
+    ! Section to do adjustment point by point
+    ! coding for cov_factor
+
+    call get_time(m_time, m_seconds, m_days)
+    m_hours = m_seconds/3600 + m_days * 24
+
+    ngrids = 0
+
+    !===== Eakf assim start =====================================
+    ! for special handling on corrections in vertical direction
+
+    !call mpp_sync_self() !lulv comment
+
+!    if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!       print*,'in pe=',mpp_pe(),'num_prfs_loc_halo=', num_prfs_loc_halo,'isc,iec,jsc,jec=',isd_ens, ied_ens, jsd_ens, jed_ens
+!       print*,'in pe=',mpp_pe(),'lon1,lon2=',T_grid%x(isd_ens,jsd_ens),T_grid%x(ied_ens,jed_ens)
+!       print*,'in pe=',mpp_pe(),'lat1,lat2=',T_grid%y(isd_ens,jsd_ens),T_grid%y(ied_ens,jed_ens)
+!    end if
+
+    doloop_9: do lji=1, num_prfs_loc_halo ! (9)
+       lji0 = list_loc_halo_prfs(lji)
+
+       if (Profiles(lji0)%accepted) then ! ifblook prf accepted
+
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+
+! snz add on dec. 17, 2011 to differ the impact radius in coast area
+       idx_i0 = Profiles(lji0)%i_index
+       idx_j0 = Profiles(lji0)%j_index
+       idx_depth = sum(T_grid%mask(idx_i0,idx_j0,:))
+       if (idx_depth <= 0 .or. idx_depth > nk) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+         stop
+       end if
+
+       depth_factor = 1.0
+
+       obs_loc%lat = Profiles(lji0)%lat
+       obs_loc%lon = Profiles(lji0)%lon !lulv 2020-04-17
+       if(obs_loc%lon>360)   obs_loc%lon=obs_loc%lon - 360.0 !lulv 2020-04-17
+       if(obs_loc%lon<0)     obs_loc%lon=obs_loc%lon + 360.0 !lulv 2020-04-17
+
+       if ((obs_loc%lat < 10.0 .and. obs_loc%lon > 290.0 .and. obs_loc%lon < 335.0) .or. &
+           (obs_loc%lat >= 10.0 .and. obs_loc%lat <= 20.0 .and. obs_loc%lon > 270.0 .and. obs_loc%lon < 335.0) &
+           .or. (obs_loc%lat > 20.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 335.0)) then ! the west of Atlantic
+       prf_depth = d_g(idx_depth)
+       if (abs(Profiles(lji0)%lat) < 20.0) then
+       if (prf_depth > 2.*depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*2.*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/(2.*depth_coast)
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) >= 20.0 .and. abs(Profiles(lji0)%lat) <= 40.0) then
+       if (prf_depth > 1.5*depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*1.5*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/(1.5*depth_coast)
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 40.0 .and. abs(Profiles(lji0)%lat) <= 60.0) then
+       if (prf_depth > depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/depth_coast
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 60.0) then
+         depth_factor = 1.0
+       end if
+       end if ! the west of Atlantic
+       if (depth_factor < 0.0 .or. depth_factor > 1.0) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": depth_factor = ",e12.6)') mpp_pe(), depth_factor
+         stop
+       end if
+       ! end of snz add on dec. 17, 2011 to differ the impact radius in coast area
+
+       call get_time(Profiles(lji0)%time, o_seconds, o_days)
+       o_hours = o_seconds/3600 + o_days * 24
+
+!if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!   print*,'m_hours,o_hours=',m_hours,o_hours
+!end if
+
+       o_hours = abs(o_hours - m_hours)
+
+       i0 = o_hours/24 + 1
+!       if ( i0 > size(rrt) ) then
+!          call error_mesg('eakf_mod::ensemble_filter', 'i0 greater than the size of rrt', FATAL)
+!       end if
+
+!       cov_factor_t = rrt(i0)
+       if (o_hours < prf_window*24) then
+         cov_factor_t = cos(o_hours/(prf_window*24)*0.5*3.1415926)
+       else
+         cov_factor_t = 0.0
+       end if
+
+       if ( cov_factor_t > 0.0 ) then ! control 10d time window (5+ and 5-) 
+          obs_loc%lon = Profiles(lji0)%lon
+          if ( obs_loc%lon < 80.0 ) then ! merge to model setting in oda_core
+             write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+          end if
+          if ( obs_loc%lon > 360.0 ) obs_loc%lon = obs_loc%lon-360.0
+          obs_loc%lat = Profiles(lji0)%lat
+
+          call get_close_grids(obs_loc, isd_ens, ied_ens, jsd_ens, jed_ens, &
+               & halox, haloy, T_grid, list_close_grids, num_close)
+          ngrids = ngrids + num_close
+
+          ens_tmp=ens(:,1);!lulv 2020-04-17
+          doloop_8: do k=1, num_close ! (8)
+             j = list_close_grids(k)
+
+             jj_ens = (j-1)/(ied_ens-isd_ens+2*halox+1)+1 + (jsd_ens-1-haloy)
+             ii_ens = mod(j, ied_ens-isd_ens+2*halox+1)
+             if ( ii_ens == 0 ) ii_ens = ied_ens-isd_ens+2*halox+1
+             ii_ens = ii_ens + (isd_ens-1-halox)
+
+             i_h = (jj_ens-jsd_ens+haloy)*(ied_ens-isd_ens+2*halox+1)+ii_ens-isd_ens+halox+1
+
+!             if ( ii_ens <= 0 ) ii_ens = ii_ens + ni
+!             if ( ii_ens > ni ) ii_ens = ii_ens - ni
+!             if ( jj_ens < 1  ) jj_ens = 1
+!             if ( jj_ens > nj ) jj_ens = nj
+             if ( ii_ens < isd_ens-halox .or. ii_ens > ied_ens+halox ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": ii_ens = ",I8)') mpp_pe(), ii_ens
+             end if
+             if ( jj_ens < jsd_ens-haloy .or. jj_ens > jed_ens+haloy ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": jj_ens = ",I8)') mpp_pe() ,jj_ens
+             end if
+
+             model_loc%lon = T_grid%x(ii_ens, jj_ens)
+             model_loc%lat = T_grid%y(ii_ens, jj_ens)
+             model_loc%lon = model_loc%lon+360.0
+             if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+
+             assim_flag = 1
+
+             ! do not do assim over some islands
+             ! East bound
+!!$             if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 278.0 .and. model_loc%lon < 305.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat >= 17.0 .and. model_loc%lat <= 25.0)&
+!!$                  & .and. (model_loc%lon > 262.0 .and. model_loc%lon <= 278.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat > -27.0 .and. model_loc%lat < -18.0)&
+!!$                  & .and. (model_loc%lon > 300.0 .and. model_loc%lon < 330.0) ) assim_flag = 0
+
+             ! do not do assim over some islands
+             ! West bound
+!!$             if ( (model_loc%lat > -15.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 25.0 .and. model_loc%lon < 100.0) ) assim_flag = 0
+
+             if ( assim_flag /= 0 ) then ! (7)
+                assim_flag = 1
+
+                ! for test of estimate uncertainty of analysis !!!!!!!!
+                
+!!$                if ( (obs_loc%lat > -1.0 .and. obs_loc%lat < 1.0) .and.&
+!!$                     & (obs_loc%lon > 139.0 .and. obs_loc%lon < 141.0) ) assim_flag = 0
+
+                ! do not allow obs to have impact on grids separated by continents
+                ! East bound
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 260.0 .and. model_loc%lon < 280.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 240.0 .and. obs_loc%lon < 260.0) ) assim_flag = 0
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 240.0 .and. model_loc%lon < 260.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 280.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon > 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon < 270.0) ) assim_flag = 0
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon < 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon > 270.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon > 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon < 275.0) ) assim_flag = 0
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon < 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon > 275.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 290.0 .and. model_loc%lon < 360.0 ) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 110.0 .and. obs_loc%lon < 290.0) ) assim_flag = 0
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 110.0 .and. model_loc%lon < 290.0) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 290.0 .and. obs_loc%lon < 360.0) ) assim_flag = 0
+
+                ! west bound
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon > 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon > 100.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon > 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon < 77.0) ) assim_flag = 0
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon < 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon > 77.0) ) assim_flag = 0
+
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon > 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon < 110.0) ) assim_flag = 0
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon < 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon > 110.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 145.0 .and. model_loc%lon < 165.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 125.0 .and. obs_loc%lon < 145.0) ) assim_flag = 0
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 125.0 .and. model_loc%lon < 145.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 145.0 .and. obs_loc%lon < 165.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 0.0 .and. obs_loc%lon < 25.0) ) assim_flag = 0
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 0.0 .and. model_loc%lon < 25.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. obs_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+
+                ifblock_6: if ( assim_flag /= 0 ) then ! (6)
+                   dist = get_dist(model_loc, obs_loc)
+                   dist = RADIUS * sqrt(dist)
+
+                   cov_factor = cov_factor_t 
+
+!!$                   ifblock_5: if ( cov_factor > 0.0 ) then ! (5) redundent with cov_factor_t >0 !!
+
+                      ifblock_4_4: if ( Profiles(lji0)%variable == TEMP_ID .or. &
+                           & Profiles(lji0)%variable == SALT_ID .or. &
+                           & Profiles(lji0)%variable == WOAT_ID .or. &
+                           & Profiles(lji0)%variable == WOAS_ID ) then ! T,S -> T,S (4.4)
+                         kk_bot = Profiles(lji0)%k_index(k0)
+                         depth_bot = Profiles(lji0)%depth(k0)
+                         doloop_4: do kk = 1, k0 ! (4)
+                            if ( Profiles(lji0)%flag(kk) ) then ! add each level flag
+                               idx_obs = index_obs(lji0,kk)
+                               if (idx_obs == 0 ) then 
+                                  write (UNIT=stdout_unit, FMT='("lji0 = ",I8)') lji0
+                               end if
+
+                               do j_ens=1, ens_size
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  v2_h_lfq = 0.0 !lulv
+                                  v2_l_lfq = 0.0 !lulv
+                                  if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                       & Profiles(lji0)%variable == WOAT_ID ) then
+                                     do i_idx=1, 4
+                                        ind_temp_h = obs_def(idx_obs)%state_var_index(i_idx)
+                                        ind_temp_l = obs_def(idx_obs)%state_var_index(i_idx+4)
+                                        v2_h = v2_h + ens_tmp(ind_temp_h)*obs_def(idx_obs)%coef(i_idx) !lulv 2020-04-17
+                                        v2_l = v2_l + ens_tmp(ind_temp_l)*obs_def(idx_obs)%coef(i_idx) !lulv 2020-04-17
+                                        v2_h_lfq = v2_h_lfq + ensb(ind_temp_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                        v2_l_lfq = v2_l_lfq + ensb(ind_temp_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                     end do
+                                     enso_temp(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                     enso_temp_lfq(j_ens) = v2_h_lfq*obs_def(idx_obs)%coef(5) + v2_l_lfq*obs_def(idx_obs)%coef(6) !lulv
+                                  end if
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  v2_h_lfq = 0.0 !lulv
+                                  v2_l_lfq = 0.0 !lulv
+                                  if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                       & Profiles(lji0)%variable == WOAS_ID ) then
+                                     do i_idx=1, 4
+                                        ind_salt_h = obs_def(idx_obs)%state_var_index(i_idx)+nk*blk
+                                        ind_salt_l = obs_def(idx_obs)%state_var_index(i_idx+4)+nk*blk
+                                        v2_h = v2_h + ens_tmp(ind_salt_h)*obs_def(idx_obs)%coef(i_idx) !chenyuhu find it's missing
+                                        v2_l = v2_l + ens_tmp(ind_salt_l)*obs_def(idx_obs)%coef(i_idx) !chenyuhu find it's missing
+                                        v2_h_lfq = v2_h_lfq + ensb(ind_salt_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                        v2_l_lfq = v2_l_lfq + ensb(ind_salt_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                     end do
+                                     enso_salt(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                     enso_salt_lfq(j_ens) = v2_h_lfq*obs_def(idx_obs)%coef(5) + v2_l_lfq*obs_def(idx_obs)%coef(6) !lulv
+                                  end if
+                               end do
+
+                               if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                    & Profiles(lji0)%variable == WOAT_ID ) then
+                                  if ( Profiles(lji0)%variable == TEMP_ID ) then
+                                     obs_var_t = sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAT_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology                                  
+
+                                    obs_var_t = woa_factor*sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index
+                                  j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_t = obs_var_t * obs_var_t
+                                  obs_var_t_oi = 25.0*obs_var_t
+                                  std_bg = 0.0
+                                  ! call obs_increment_prf_eta_hyb(enso_temp, ens_size, obs_value, obs_var_t,&
+                                       ! & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_bg)
+                                  call obs_increment_prf_eta_hyb_stn(enso_temp_lfq, enso_temp, ens_size, obs_value, obs_var_t,&
+                                       & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_bg) !lulv
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_temp(:)*obs_inc_eakf_temp(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmat_cut) then
+                                     obs_inc_eakf_temp(:) = obs_inc_sigmat_cut/obs_inc_sigma*obs_inc_eakf_temp(:)
+                                  end if
+                                  
+!if ((model_loc%lon > 299.0 .and. model_loc%lon < 300.0) .and. (model_loc%lat > 37.0 .and. model_loc%lat < 38.0)) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_temp=',enso_temp,'obs_inc_eakf_temp=',obs_inc_eakf_temp,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+
+                               if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                    & Profiles(lji0)%variable == WOAS_ID ) then
+                                  if (Profiles(lji0)%variable == SALT_ID) then
+                                     obs_var_s = sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAS_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology
+
+                                    obs_var_s = woa_factor*sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index; j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_s = obs_var_s * obs_var_s
+                                  obs_var_s_oi = 25.0*obs_var_s
+                                  std_bg = 0.0
+                                  ! call obs_increment_prf_eta_hyb(enso_salt, ens_size, obs_value, obs_var_s,&
+                                       ! & obs_inc_eakf_salt, obs_var_s_oi, obs_inc_oi_salt, std_bg)
+                                  call obs_increment_prf_eta_hyb_stn(enso_salt_lfq, enso_salt, ens_size, obs_value, obs_var_s,&
+                                       & obs_inc_eakf_salt, obs_var_s_oi, obs_inc_oi_salt, std_bg) !lulv
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_salt(:)*obs_inc_eakf_salt(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmas_cut) then
+                                     obs_inc_eakf_salt(:) = obs_inc_sigmas_cut/obs_inc_sigma*obs_inc_eakf_salt(:)
+                                  end if
+!if (abs(sum(obs_inc_eakf_salt(:))/ens_size) > 2.0) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_salt=',enso_salt,'obs_inc_eakf_salt=',obs_inc_eakf_salt,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+  
+                               kk0 = Profiles(lji0)%k_index(kk)
+
+                               if ( kk0 <= 1 ) then
+                                  kk1 = 1
+                                  kk2 = kk1 + max_impact_levels
+                                  cutoff_vd = d_g(2) - d_g(1)
+                               else if ( kk0 < kk_bot ) then
+                                  kk1 = kk0 - max_impact_levels + 1
+                                  kk2 = kk0 + max_impact_levels
+                                  cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                               else ! (for kk0=kk_bot)
+                                  if ( depth_bot <= 500.0 ) then
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     kk2 = kk0 + max_impact_levels
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  else ! (for kk0=kk_bot) .and. (depth_bot > 500.0)
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     if ( (kk0+5*max_impact_levels) <= nk ) then ! extend 10 lvls
+                                        kk2 = kk0 + 4*max_impact_levels
+                                     else
+                                        kk2 = nk
+                                     end if
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  end if
+                               end if
+
+                               std_max = sgm_tgm(1)
+                               do k_o0=2, nk
+                                  if ( std_max < sgm_tgm(k_o0) ) std_max= sgm_tgm(k_o0)
+                               end do
+                               if ( std_max > 0.0 ) sgm_tgm(:) = sgm_tgm(:)/std_max
+
+                               ens_inc_bt_t = 0.0
+                               ens_inc_bt_s = 0.0
+
+                               doloop_3: do kk_ens=kk1, kk2 ! (3)
+                                  t_tau   = (kk_ens-1)*blk + i_h
+                                  s_tau   = nk*blk + t_tau
+
+                                  ifblock_2: if ( ens_mean(t_tau) /= 0.0 ) then ! (2) using ens_mean(t_tau) as mask
+                                     if ( kk_ens <= kk0+max_impact_levels ) then
+                                        cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                             & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                     else ! for deeper than kk_bot+max_impact_levels
+                                        cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                             & d_g(kk0+max_impact_levels)), &
+                                             & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                     end if
+
+                                     cov_factor = cov_factor_v * cov_factor_t
+
+                                     ifblock_1: if ( cov_factor > 0.0 .and. &
+                                          Profiles(lji0)%depth(kk) <= depth_cut ) then ! (1)  
+                                        ifblock_0_60: if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                             & Profiles(lji0)%variable == WOAT_ID ) then ! (0.60)
+                                           ! using temperature adjusts temperature and salinity
+                                           ! temperature itself
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = temp_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = temp_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+
+                    if ( local_tropatl_box ) then
+                       if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                       end if
+                    end if 
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc(:) = 0.0
+
+                                           ifblock_0_60_1: if ( sum(ens(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = mpp_pe()*k*kk
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                 call update_from_obs_inc_prf_hyb(enso_temp_lfq,& !chenyuhu change enso_temp to enso_temp_lfq
+                                                      & obs_inc_eakf_temp, obs_inc_oi_temp, ensb(t_tau, :),& !chenyuhu change ens to ensb
+                                                      & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                 !chenyuhu   ens_bt_t(:) = ens(t_tau, :)
+                                                    !ens_bt_t(:) = enso_temp_lfq(:)
+                                                    ens_bt_t(:) = ensb(t_tau,:) !lulv 20201123
+                                                    ens_inc_bt_t(:) = ens_inc(:)
+                                                    std_oi_bt_t = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_t, ens_inc_bt_t,&
+                                                  !chenyuhu    & ens(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & ensb(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & std_oi_bt_t, std_oi_g)
+                                                 ens(t_tau, :) = ens(t_tau, :) + ens_inc(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              doloop_0: do j_ens=1,1 !lulv 20201125 ens_size ! (0)
+                                                 if ( ens(t_tau, j_ens) > 39.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                    ens(t_tau, j_ens) = 39.0
+                                                 end if
+                                                 if ( ens(t_tau, j_ens) < -4.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F25.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                    ens(t_tau, j_ens) = -4.0
+                                                 end if
+                                              end do doloop_0 ! handle the extremeties (0)
+                                           end if ifblock_0_60_1
+
+                                           ! temperature impact salinity
+                                           ifblock_0_50: if ( temp_to_salt ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                          if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+!                       if ( local_tropatl_ts ) then
+!                          if ( (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon >280.0 ) &
+!                             & .or. (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+!                              dist = 2.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+!                         end if
+!                       end if
+
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc(:) = 0.0
+
+                                              ifblock_0_50_1: if ( sum(ens(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_temp_lfq,& !chenyuhu enso_temp to enso_temp_lfq
+                                                         & obs_inc_eakf_temp, obs_inc_oi_temp, ensb(s_tau, :),& !chenyuhu ens to ensb
+                                                         & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                    !chenyuhu   ens_bt_s(:) = ens(s_tau, :)
+                                                       !ens_bt_s(:) = enso_temp_lfq(:)
+                                                       ens_bt_s(:) = ensb(s_tau,:) !lulv 20201123
+                                                       ens_inc_bt_s(:) = ens_inc(:)
+                                                       std_oi_bt_s = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_s, ens_inc_bt_s,&
+                                                      !chenyuhu   ens(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         ensb(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & std_oi_bt_s, std_oi_g)
+                                                    ens(s_tau, :) = ens(s_tau, :) + ens_inc(:)
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 doloop_00: do j_ens = 1,1 !lulv 20201125 ens_size ! (0)
+                                                    if ( ens(s_tau, j_ens) > 44.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)') &
+                                                            & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                       ens(s_tau, j_ens) = 44.0
+                                                    end if
+
+                                                    if ( ens(s_tau, j_ens) < 0.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                       ens(s_tau, j_ens) = 0.0
+                                                    end if
+                                                 end do doloop_00 ! handle the extremeties (0)
+                                              end if ifblock_0_50_1
+                                           end if ifblock_0_50 ! impact salinity or not (0.5)
+
+                                        end if ifblock_0_60 ! finish processing temperature profiles (0.60)
+
+                                        ifblock_0_61: if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                             & Profiles(lji0)%variable == WOAS_ID ) then ! (0.61)
+                                           ! using salinity adjusts salinity and temperature
+                                           ! salinity itself
+                                           if ( kk_ens <= kk0+max_impact_levels ) then
+                                              cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                                   & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                           else ! for deeper than kk_bot+max_impact_levels
+                                              cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                                   & d_g(kk0+max_impact_levels)), &
+                                                   & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                           end if
+
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+                       if ( local_tropatl_box ) then
+                        if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+
+                      if ( global_tropatl_s2s ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc(:) = 0.0
+                                           ifblock_0_61_1: if ( sum(ens(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = 1
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                 call update_from_obs_inc_prf_hyb(enso_salt_lfq,& !chenyuhu enso_salt to enso_salt_lfq
+                                                      & obs_inc_eakf_salt, obs_inc_oi_salt, ensb(s_tau, :),& !chenyuhu ens to ensb
+                                                      & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                 !chenyuhu   ens_bt_s(:) = ens(s_tau, :)
+                                                    !ens_bt_s(:) = enso_salt_lfq(:)
+                                                    ens_bt_s(:) = ensb(s_tau,:) !lulv 20201123
+                                                    ens_inc_bt_s(:) = ens_inc(:)
+                                                    std_oi_bt_s = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_s, ens_inc_bt_s,&
+                                                  !chenyuhu    & ens(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & ensb(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & std_oi_bt_s, std_oi_g)
+                                                 ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              do j_ens = 1, ens_size ! (0)
+                                                 if ( ens(s_tau, j_ens) > 44.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                    ens(s_tau, j_ens) = 44.0
+                                                 end if
+                                                 if ( ens(s_tau, j_ens) < 0.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                    ens(s_tau, j_ens) = 0.0
+                                                 end if
+                                              end do ! handle the extremeties (0)
+                                           end if ifblock_0_61_1
+
+                                           ! salinity impact temperature
+                                           ifblock_0_5: if ( salt_to_temp ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                         if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+                      if ( local_tropatl_s2t ) then
+                       if ( (obs_loc%lat < tropatl_s2t_latn .and. obs_loc%lat > tropatl_s2t_lats .and. obs_loc%lon >280.0 ) &
+                         & .or. (obs_loc%lat < tropatl_s2t_latn  .and. obs_loc%lat > tropatl_s2t_lats  .and. obs_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+                           dist = 3.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+                        end if
+                      end if
+                     if ( global_tropatl_s2t ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc(:) = 0.0
+                                              ifblock_0_5_1: if ( sum(ens(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_salt_lfq,& !chenyuhu enso_salt to enso_salt_lfq
+                                                         & obs_inc_eakf_salt, obs_inc_oi_salt, ensb(t_tau, :),& !chenyuhu ens to ensb
+                                                         & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                   !chenyuhu    ens_bt_t(:) = ens(t_tau, :)
+                                                       !ens_bt_t(:) = enso_salt_lfq(:)
+                                                       ens_bt_t(:) = ensb(t_tau,:) !lulv 20201123
+                                                       ens_inc_bt_t(:) = ens_inc(:)
+                                                       std_oi_bt_t = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_t, ens_inc_bt_t,&
+                                                     !chenyuhu    & ens(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & ensb(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & std_oi_bt_t, std_oi_g)
+                                                    ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 do j_ens = 1,1 !lulv 20201125 ens_size ! (0)
+                                                    if ( ens(t_tau, j_ens) > 39.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                       ens(t_tau, j_ens) = 39.0
+                                                    end if
+                                                    if(ens(t_tau, j_ens) < -4.0) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                       ens(t_tau, j_ens) = -4.0
+                                                    end if
+                                                 end do ! handle the extremeties (0)
+                                              end if ifblock_0_5_1
+                                           end if ifblock_0_5 ! impact temperature or not (0.5)
+
+                                        end if ifblock_0_61 ! finish processing slinity profiles (0.61)
+
+                                     end if ifblock_1 ! only use obs which has cov_factor > 0.0 (1)
+                                  end if ifblock_2 ! only do non-masked points (2)
+                               end do doloop_3 ! finish adjustments for related model levels (3)
+
+                               if ( Profiles(lji0)%depth(kk) < d4ass_txty .and. &
+                                    & (model_loc%lat > ass_txty_lat_start .and. &
+                                    & model_loc%lat < ass_txty_lat_end) ) then ! lat and depth
+                                  if ( ens_mean(i_h) /= 0.0 ) then ! ens_mean = 0.0
+                                     dist0 = txty_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                     cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                          & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                     cov_factor_v = comp_cov_factor(Profiles(lji0)%depth(kk), d4ass_txty)
+                                     cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                     ass_variable = 2
+
+                                     if ( Profiles(lji0)%variable == TEMP_ID ) then ! TEMP_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                                   & obs_inc_oi_temp, ens(i_uflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_uflx, :) = ens(i_uflx, :) + ens_inc(:)
+                                           end if
+
+                                           ens_inc(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                                   & obs_inc_oi_temp, ens(i_vflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_vflx, :) = ens(i_vflx, :) + ens_inc(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! TEMP_ID
+
+                                     if ( Profiles(lji0)%variable == SALT_ID ) then ! SALT_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt, obs_inc_eakf_salt,&
+                                                   & obs_inc_oi_salt, ens(i_uflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_uflx, :) = ens(i_uflx, :) + ens_inc(:)
+                                           end if
+
+                                           ens_inc(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt, obs_inc_eakf_salt,&
+                                                   & obs_inc_oi_salt, ens(i_vflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_vflx, :) = ens(i_vflx, :) + ens_inc(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! SALT_ID
+                                  end if ! ens_mean=0.0
+                               end if ! lat and depth
+                            end if ! add each level flag
+                         end do doloop_4 ! go through one profile column (4)
+                      end if ifblock_4_4 ! T,S -> T,S,U,V,tx,ty; ETA -> T,S,U,V (4.4)
+!!$                   end if ifblock_5 ! only adjust points that have a positive cov_factor (d&t) (5)
+                end if ifblock_6 ! get rid of land points (6)
+             end if ! get rid of obs crossing the basin bound (optional) (7)
+          end do doloop_8 ! finish the adjustments for all related model columns (8)
+       end if ! control 10d time window (5+ & 5-)
+       ! if (ngrids == 0) print*,'ngrids=',ngrids,'in pe=',mpp_pe()
+
+       end if ! ifblock prf accepted
+
+    end do doloop_9 ! finish all profiles (9)
+
+    !===== Eakf assim finish =====================================
+
+    ! Compute ensemble mean of current assimilated state
+    !
+    ! Redistribute the sub ensemble state vector ens(:, :) back to the model grids
+    ! in the local-domain.
+    call red_ens(temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens,&
+         & halox, haloy, nk, ens, ass_method)
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished red_ens")') mpp_pe()
+    end if
+
+!!$    ! store the adj amount in corr_t(s)
+!!$    do j_ens=1, ens_size
+!!$       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$    end do
+!!$    ! extend the adj amount to the deep water
+!!$    do j_ens=1, ens_size
+!!$       do j=jsd, jed
+!!$          do i=isd, ied
+!!$             obs_only: do k = 3, nk ! how about obs only ssh?
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) == 0.0 ) exit obs_only
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) /= 0.0 ) then
+!!$                   write (UNIT=stdout_unit, FMT='("corr_t(",I8,")%data(",3I5,") = ",F15.8)')&
+!!$                        & j_ens, i, j, k, corr_t(j_ens)%data(i,j,k)
+!!$                   write (UNIT=stdout_unit, FMT='("corr_s(",I8,")%data(",3I5,") = ",F25.8)')&
+!!$                        & j_ens, i, j, k, corr_s(j_ens)%data(i,j,k)
+!!$                end if
+!!$             end do obs_only
+!!$             nk_adj = k-1
+!!$             if ( d_g(nk_adj) <= 200.0 ) e_flder_aed = 20.0
+!!$             if ( d_g(nk_adj) > 200.0 .and. d_g(nk_adj) <= 500.0 ) e_flder_aed = 50.0
+!!$             if ( d_g(nk_adj) > 500.0 .and. d_g(nk_adj) <= 1000.0 ) e_flder_aed = 200.0
+!!$             if ( d_g(nk_adj) > 1000.0 ) e_flder_aed = 500.0
+!!$             do k=nk_adj+1, nk
+!!$                zfcn = exp(-(d_g(k)-d_g(nk_adj))/e_flder_aed)
+!!$                temp_ens_tau(j_ens)%data(i,j,k) = temp_ens_tau(j_ens)%data(i,j,k) + corr_t(j_ens)%data(i,j,nk_adj)*zfcn
+!!$                salt_ens_tau(j_ens)%data(i,j,k) = salt_ens_tau(j_ens)%data(i,j,k) + corr_s(j_ens)%data(i,j,nk_adj)*zfcn
+!!$             end do
+!!$          end do
+!!$       end do
+!!$    end do
+
+    call obs_end()
+
+    first_run_call = .false.
+    deallocate(list_close_grids)
+!    call mpp_clock_end(id_eakf_total)
+  end subroutine ens_lfq_filter !lulv
+
+
+  subroutine ens_hfq_filter(T_ens_hfq, temp_ens_tau, salt_ens_tau, uflx_ens, vflx_ens, &
+       & Profiles, nprof, isd, ied, jsd, jed, halox, haloy, T_grid, itt, m_time) !lulv
+    type(field_type), dimension(:), intent(inout) :: temp_ens_tau, salt_ens_tau
+    type(field_type), dimension(:), intent(inout) :: uflx_ens, vflx_ens
+    type(field_type), dimension(:,:), intent(inout) :: T_ens_hfq !lulv
+    type(ocean_profile_type), dimension(:), intent(in) :: Profiles
+    type(grid_type), intent(in) :: T_grid
+    type(time_type), intent(in) :: m_time
+    integer, intent(inout) :: nprof
+    integer, intent(in) :: isd, ied, jsd, jed, halox, haloy
+!    integer, intent(inout) :: iass
+    integer, intent(in) :: itt !lulv
+    !---- namelist with default values
+    real :: cov_inflate = 1.0
+    real :: prf_window = 10.0 ! in days
+    real :: sigma_o_t = 1.0
+    real :: sigma_o_s = 1.0
+    real :: factor_woat = 100.0
+    real :: factor_woab = 25.0
+    real :: cov_factor = 0.0
+    real :: cutoff_v = 10.0
+    real :: std_cut_b = 0.031623
+    real :: std_cut_t = 1.00
+    real :: temp_dist = 1000.0e3
+    real :: salt_dist = 500.0e3
+    real :: txty_dist = 500.0e3
+    real :: prf_hyb_d = 500.0e3
+
+    integer :: max_impact_levels = 7
+    integer :: assim_freq = 1
+    integer :: ass_method = 1 ! 0 for snz-oi, 1 for eakf inv, 2 for eakf multv
+
+    logical :: add_on = .false.
+    logical :: ass_uv = .false.
+    logical :: ass_txty = .false.
+    logical :: salt_to_temp = .false.
+    logical :: temp_to_salt = .false.
+    logical :: debug_eakf = .false.
+    logical :: local_tropatl_box = .false.
+    logical :: local_tropatl_s2t = .false.
+    logical :: global_tropatl_s2t = .false.
+    logical :: global_tropatl_s2s = .false.
+
+    real :: ass_txty_lat_start = -20.0
+    real :: ass_txty_lat_end = 20.0
+    real :: d4ass_txty = 200.0 
+    real :: depth_cut = 500.0
+    real :: e_flder_oer = 2000.0
+    real :: woa_lat = 30.0 ! woa_lat >= 20.0
+    real :: depth_coast = 1000.0
+    real :: obs_inc_sigmat_cut = 2.0
+    real :: obs_inc_sigmas_cut = 1.0
+    real :: tropatl_s2t_latn = 20.0
+    real :: tropatl_s2t_lats = -10.0
+    real :: global_s2t_latn = 20.0
+    real :: global_s2t_lats = -10.0
+
+    namelist /hfqf_nml/prf_window,sigma_o_t, sigma_o_s, factor_woat, factor_woab, max_impact_levels, ass_method, &
+         & ass_txty, std_cut_b, std_cut_t, temp_dist, salt_dist, ass_txty_lat_start, ass_txty_lat_end, &
+         & d4ass_txty, txty_dist, depth_cut, e_flder_oer, prf_hyb_d, salt_to_temp, temp_to_salt, &
+         & depth_coast, woa_lat, debug_eakf, obs_inc_sigmat_cut, obs_inc_sigmas_cut, local_tropatl_box, local_tropatl_s2t, &
+         & tropatl_s2t_latn, tropatl_s2t_lats, global_tropatl_s2t, global_tropatl_s2s, global_s2t_latn, global_s2t_lats
+
+    !--- module name and version number ----
+    character(len=*), parameter :: module_name = 'hfqf'
+    character(len=*), parameter :: vers_num = 'x00.0'
+
+    !=======================================================================
+    integer :: ass_variable = 1 ! 1 for temperature, 2 for salinity
+    integer :: flag_hyb = 0 ! 0 for hyb scheme, 1 for eakf
+    integer :: ni, nj, nk
+    integer :: stdout_unit
+
+    !=======================================================================
+    integer :: num_prfs_loc_halo
+    integer, dimension(MAX_PROFILES) :: list_loc_halo_prfs
+    integer, dimension(MAX_PROFILES, MAX_LEVELS) :: index_obs
+!!$    integer, dimension(360*200) :: list_close_grids
+    integer, dimension(:), allocatable :: list_close_grids
+
+    !=======================================================================
+    integer :: id_eakf_total
+    integer :: isd_ens, ied_ens, jsd_ens, jed_ens, nprofb, ngrids, nproft
+
+    real :: cutoff_vd, cor_oi, e_flder_aed
+    real :: cov_factor_v, cov_factor_t, cov_factor_h
+
+    integer :: num_close, assim_flag
+    type(loc_type) :: model_loc, obs_loc, model_loc_u
+
+    integer :: ii_ens, jj_ens, kk_ens, nv, T_p_id !lulv add T_p_id
+    integer :: ind_temp_h, ind_temp_l, ind_salt_h, ind_salt_l, ind_u, ind_v, ind_eta
+    integer :: i0, i, j, k, k0, kk, num, blk, i_idx
+    integer :: t_tau, s_tau, u_tau, v_tau, i_uflx, i_vflx, i_eta
+    integer :: i_tflx, i_qflx, i_lwflx, i_swflx
+    integer :: idx_obs, idx_buf, idx_k, lji0, npe, npes, kk0, kk1, kk2
+    integer :: lji, model_size, ens_size
+    integer :: unit, ierr, io, pe_curr, j_ens, i_h, i_v0, kk_bot, nk_adj
+    integer :: m_days, m_hours, m_seconds, o_days, o_hours, o_seconds, hours0
+    integer :: i_o, j_o, k_o, i_og, j_og, k_og, j_o0, k_o0, idx_cor
+    integer, dimension(20) :: ind_unit
+    integer :: lcg_size
+
+    !---------------------------------------------------------------------------
+    real :: obs_value, obs_var_t, obs_var_s, obs_var_t_oi, obs_var_s_oi
+    real :: std_oi, std_oi_o, std_oi_g, std_oi_bt_t, std_oi_bt_s, std_c, std_bg
+    real :: dist, dist0
+    real :: v2_h, v2_l, zfcn, v2_h_hfq, v2_l_hfq !lulv add v2_h_hfq,v2_l_hfq
+    real :: depth_bot, std_max, obs_inc_sigma
+    real, dimension(50) :: sgm_tgm
+    !---------------------------------------------------------------------------
+    real :: prf_depth, depth_factor, woa_factor, depth_lat
+    integer :: idx_i0, idx_j0, idx_depth
+
+    !---------------------------------------------------------------------------
+    character(len=40) :: file_name
+    character(len=40) :: diag_file
+
+    sgm_tgm = (/.98, .97, .95, .97, .98, 1., 1., 1., .98, .98, .95, .94, .91,&
+         & .86, .83, .80, .77, .75, .72, .72, .69, .67, .66, .64, .61, .58,&
+         & .53, .48, .44, .39, .34, .30, .25, .20, .16, .13, .11, .09, .06,&
+         & .05, .03, .03, .02, .02, .02, .02, .02, .02, .02, .02/)
+
+    stdout_unit = stdout()
+    !---------------------------------------------------------------------------
+    ni = T_grid%ni
+    nj = T_grid%nj
+    nk = T_grid%nk
+
+    std_c = 0.5
+    !---------------------------------------------------------------------------
+    
+    ! Start the clock
+    id_eakf_total = mpp_clock_id('(total eakf computation)')
+!    call mpp_clock_begin(id_eakf_total)
+
+
+!    call mpp_print_memuse_stats('ensemble_filter Before allocate list_close_grids')    
+
+    !---------------------------------------------------------------------------
+    ! Allocate list_close_grids
+    lcg_size = (ied-isd + 2*halox + 1)*(jed-jsd + 2*haloy + 1)
+    allocate(list_close_grids(1:lcg_size), STAT=ierr) !lulv comment 5 lines
+    if ( ierr /= 0 ) then
+        CALL error_mesg ('eakf_oda_mod::ens_hfq_filter',&
+             & 'Unable to allocate list_close_grids', FATAL)
+    end if
+
+!    call mpp_print_memuse_stats('ensemble_filter after allocate list_close_grids')    
+
+    isd_ens = isd
+    ied_ens = ied
+    jsd_ens = jsd
+    jed_ens = jed
+
+    ens_size = size(temp_ens_tau)
+!    iass = iass + 1 !lulv
+ 
+    npes = mpp_npes()
+    pe_curr = mpp_pe()
+
+    ! Read namelist for run time control
+    if ( file_exist('input.nml') ) then
+       unit = open_namelist_file()
+       read(unit, nml = hfqf_nml, iostat=io)
+       call close_file(unit)
+    else
+       ! Set mystat to an arbitrary positive number if input.nml does not exist.
+       io = 100
+    end if
+
+    if ( check_nml_error(io, 'hfqf_nml') < 0 ) then
+       if ( mpp_pe() == mpp_root_pe() ) then
+          call error_mesg('eakf_mod::ens_hfq_filter', 'EAKF_NML not found in input.nml.  Using defaults.', WARNING)
+       end if
+    end if
+
+    ! Write the namelist to a log file
+    call write_version_number(vers_num, module_name)
+
+    ! if ( mod(iass,assim_freq) /= 0 ) then
+       ! deallocate(list_close_grids)
+       ! return
+    ! end if !lulv comment 4 lines
+    ! return ! record for ada_only
+
+    if ( nprof > MAX_PROFILES ) nprof = MAX_PROFILES
+
+    blk = (jed_ens-jsd_ens+2*haloy+1)*(ied_ens-isd_ens+2*halox+1)
+
+    !--------------------------------------------------------------------------
+    call init_model(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, nk, ass_method)
+    model_size = get_model_size()
+
+    ! Begin by initializing the observations
+!    call mpp_print_memuse_stats('ensemble_filter Before obs_init')    
+    call obs_init(isd_ens, ied_ens, jsd_ens, jed_ens, halox, haloy, Profiles, nprof,&
+         & MAX_LEVELS, T_grid, list_loc_halo_prfs, num_prfs_loc_halo)
+
+!    call mpp_print_memuse_stats('ensemble_filter After obs_init')    
+
+    if ( .not.module_initialized ) then
+       call eakf_oda_init(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isd, IED=ied, JSD=jsd, JED=jed, NK=nk)
+    end if
+
+    d_g(:) = T_grid%z(:)
+
+    ! Initialize assim tools module
+    call assim_tools_init()
+
+    ! print namelist
+    if ( pe_curr == mpp_root_pe() .and. first_run_call ) then
+       write (stdout_unit, *) 'model size is ', model_size, 'ensemble size is ', ens_size
+       write (stdout_unit, *) 'prf_window is ', prf_window, 'cov_inflate is ', cov_inflate
+       write (stdout_unit, *) 'temp obs standard derivation is ', sigma_o_t
+       write (stdout_unit, *) 'salt obs standard derivation is ', sigma_o_s
+       write (stdout_unit, *) 'weak woa climate top constraint (k*sigma_o_t) k= ', factor_woat
+       write (stdout_unit, *) 'weak woa climate bot constraint (k*sigma_o_s) k= ', factor_woab
+       write (stdout_unit, *) 'cov_factor is ', cov_factor
+       write (stdout_unit, *) 'MAX_LEVELS is ', MAX_LEVELS
+       write (stdout_unit, *) 'max_impact_levels is ', max_impact_levels
+       write (stdout_unit, *) 'assim_freq is ', assim_freq
+       write (stdout_unit, *) 'ass_method is ', ass_method
+       write (stdout_unit, *) 'no of prfs is ', nprof
+       write (stdout_unit, *) 'std_cut_b is', std_cut_b
+       write (stdout_unit, *) 'std_cut_t is', std_cut_t
+       write (stdout_unit, *) 'ass_txty is', ass_txty
+       write (stdout_unit, *) 'temp_dist, salt_dist are', temp_dist, salt_dist
+       write (stdout_unit, *) 'ass_txty_lat_start, ass_txty_lat_end are', ass_txty_lat_start, ass_txty_lat_end
+       write (stdout_unit, *) 'd4ass_txty is', d4ass_txty
+       write (stdout_unit, *) 'txty_dist is', txty_dist
+       write (stdout_unit, *) 'depth_cut is', depth_cut
+       write (stdout_unit, *) 'e_flder_oer is', e_flder_oer
+       write (stdout_unit, *) 'prf_hyb_d is', prf_hyb_d
+       write (stdout_unit, *) 'temp(salt)_to_salt(temp) is', temp_to_salt, salt_to_temp
+       write (stdout_unit, *) 'depth_coast is',depth_coast,'woa_lat is',woa_lat
+
+       ! nprofb = 0
+       do i=1, nprof
+          if ( Profiles(i)%levels > MAX_LEVELS ) then 
+             write (UNIT=stdout_unit, FMT='("for ",I8,"th prf, levels = ",I8)') i, Profiles(i)%levels
+          end if
+       end do
+    end if
+
+    ! store the temp and salt values in corr_t(s)
+!    do j_ens=1, ens_size
+!       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) = &
+!            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished eakf initialization")') mpp_pe()
+    end if
+
+!lulv add 6 lines below
+! if (itt <= ens_size) then
+  ! T_p_id = itt
+! else
+  ! T_p_id = ens_size
+! end if
+! !if (mpp_pe() ==10)print*,'Tracer.01=',T_prog_ens_tau(1,T_p_id)%data(ied,jsd:jed,1)
+!lulv add 6 lines above
+    ! Form the ensemble state vector: ens(:, :)
+!    call ens_ics(temp_ens_tau, salt_ens_tau, &
+!         & uflx_ens, vflx_ens, &
+!         & isd_ens, ied_ens, jsd_ens, jed_ens, &
+!         & halox, haloy, nk, ens, ass_method)
+    call ens_ics_stn(T_ens_hfq, temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens, &
+         & halox, haloy, nk, ens, ensb, ass_method) !lulv
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished ens_ics")') mpp_pe()
+    end if
+
+    ! ###########################################################
+    ! The assimilation main part starts here
+
+    ! Compute the ensemble mean of the initial ensemble before assimilation
+    ens_mean = sum(ens, dim=2) / ens_size
+
+    !go to 1001
+
+    !call mpp_sync_self() !lulv comment
+
+    ! Loop through each observation location available at this time
+    index_obs = 0
+    idx_obs = 0
+    do lji=1, num_prfs_loc_halo
+       lji0 = list_loc_halo_prfs(lji)
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+       do kk=1, k0
+          idx_obs = idx_obs + 1
+          index_obs(lji0,kk) = idx_obs
+       end do
+    end do
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished index_obs")') mpp_pe()
+    end if
+
+    obs_var_t_oi = (5.0*sigma_o_t)**2
+    obs_var_s_oi = (5.0*sigma_o_s)**2
+
+    ! Section to do adjustment point by point
+    ! coding for cov_factor
+
+    call get_time(m_time, m_seconds, m_days)
+    m_hours = m_seconds/3600 + m_days * 24
+
+    ngrids = 0
+
+    !===== Eakf assim start =====================================
+    ! for special handling on corrections in vertical direction
+
+    !call mpp_sync_self() !lulv comment
+
+!    if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!       print*,'in pe=',mpp_pe(),'num_prfs_loc_halo=', num_prfs_loc_halo,'isc,iec,jsc,jec=',isd_ens, ied_ens, jsd_ens, jed_ens
+!       print*,'in pe=',mpp_pe(),'lon1,lon2=',T_grid%x(isd_ens,jsd_ens),T_grid%x(ied_ens,jed_ens)
+!       print*,'in pe=',mpp_pe(),'lat1,lat2=',T_grid%y(isd_ens,jsd_ens),T_grid%y(ied_ens,jed_ens)
+!    end if
+
+    doloop_9: do lji=1, num_prfs_loc_halo ! (9)
+       lji0 = list_loc_halo_prfs(lji)
+
+       if (Profiles(lji0)%accepted) then ! ifblook prf accepted
+
+       k0 = Profiles(lji0)%levels
+       if ( k0 > MAX_LEVELS ) k0 = MAX_LEVELS
+
+! snz add on dec. 17, 2011 to differ the impact radius in coast area
+       idx_i0 = Profiles(lji0)%i_index
+       idx_j0 = Profiles(lji0)%j_index
+       idx_depth = sum(T_grid%mask(idx_i0,idx_j0,:))
+       if (idx_depth <= 0 .or. idx_depth > nk) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+         stop
+       end if
+
+       depth_factor = 1.0
+
+       obs_loc%lat = Profiles(lji0)%lat
+       obs_loc%lon = Profiles(lji0)%lon !lulv 2020-04-17
+       if(obs_loc%lon>360)   obs_loc%lon=obs_loc%lon - 360.0 !lulv 2020-04-17
+       if(obs_loc%lon<0)     obs_loc%lon=obs_loc%lon + 360.0 !lulv 2020-04-17
+
+       if ((obs_loc%lat < 10.0 .and. obs_loc%lon > 290.0 .and. obs_loc%lon < 335.0) .or. &
+           (obs_loc%lat >= 10.0 .and. obs_loc%lat <= 20.0 .and. obs_loc%lon > 270.0 .and. obs_loc%lon < 335.0) &
+           .or. (obs_loc%lat > 20.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 335.0)) then ! the west of Atlantic
+       prf_depth = d_g(idx_depth)
+       if (abs(Profiles(lji0)%lat) < 20.0) then
+       if (prf_depth > 2.*depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*2.*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/(2.*depth_coast)
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) >= 20.0 .and. abs(Profiles(lji0)%lat) <= 40.0) then
+       if (prf_depth > 1.5*depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*1.5*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/(1.5*depth_coast)
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 40.0 .and. abs(Profiles(lji0)%lat) <= 60.0) then
+       if (prf_depth > depth_coast) then
+         depth_factor = 1.0
+       elseif (prf_depth < 0.2*depth_coast) then
+         depth_factor = 0.2
+       else
+         depth_factor = prf_depth/depth_coast
+       end if
+       end if
+       if (abs(Profiles(lji0)%lat) > 60.0) then
+         depth_factor = 1.0
+       end if
+       end if ! the west of Atlantic
+       if (depth_factor < 0.0 .or. depth_factor > 1.0) then
+         write (UNIT=stdout_unit, FMT='("PE ",I5,": depth_factor = ",e12.6)') mpp_pe(), depth_factor
+         stop
+       end if
+       ! end of snz add on dec. 17, 2011 to differ the impact radius in coast area
+
+       call get_time(Profiles(lji0)%time, o_seconds, o_days)
+       o_hours = o_seconds/3600 + o_days * 24
+
+!if ( debug_eakf .and. mpp_pe() == 3361 ) then
+!   print*,'m_hours,o_hours=',m_hours,o_hours
+!end if
+
+       o_hours = abs(o_hours - m_hours)
+
+       i0 = o_hours/24 + 1
+!       if ( i0 > size(rrt) ) then
+!          call error_mesg('eakf_mod::ensemble_filter', 'i0 greater than the size of rrt', FATAL)
+!       end if
+
+!       cov_factor_t = rrt(i0)
+       if (o_hours < prf_window*24) then
+         cov_factor_t = cos(o_hours/(prf_window*24)*0.5*3.1415926)
+       else
+         cov_factor_t = 0.0
+       end if
+
+       if ( cov_factor_t > 0.0 ) then ! control 10d time window (5+ and 5-) 
+          obs_loc%lon = Profiles(lji0)%lon
+          if ( obs_loc%lon < 80.0 ) then ! merge to model setting in oda_core
+             write (UNIT=stdout_unit, FMT='("PE ",I5,": lji0 = ",I8)') mpp_pe(), lji0
+          end if
+          if ( obs_loc%lon > 360.0 ) obs_loc%lon = obs_loc%lon-360.0
+          obs_loc%lat = Profiles(lji0)%lat
+
+          call get_close_grids(obs_loc, isd_ens, ied_ens, jsd_ens, jed_ens, &
+               & halox, haloy, T_grid, list_close_grids, num_close)
+          ngrids = ngrids + num_close
+
+          ens_tmp=ens(:,1);!lulv 2020-04-17
+          doloop_8: do k=1, num_close ! (8)
+             j = list_close_grids(k)
+
+             jj_ens = (j-1)/(ied_ens-isd_ens+2*halox+1)+1 + (jsd_ens-1-haloy)
+             ii_ens = mod(j, ied_ens-isd_ens+2*halox+1)
+             if ( ii_ens == 0 ) ii_ens = ied_ens-isd_ens+2*halox+1
+             ii_ens = ii_ens + (isd_ens-1-halox)
+
+             i_h = (jj_ens-jsd_ens+haloy)*(ied_ens-isd_ens+2*halox+1)+ii_ens-isd_ens+halox+1
+
+!             if ( ii_ens <= 0 ) ii_ens = ii_ens + ni
+!             if ( ii_ens > ni ) ii_ens = ii_ens - ni
+!             if ( jj_ens < 1  ) jj_ens = 1
+!             if ( jj_ens > nj ) jj_ens = nj
+             if ( ii_ens < isd_ens-halox .or. ii_ens > ied_ens+halox ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": ii_ens = ",I8)') mpp_pe(), ii_ens
+             end if
+             if ( jj_ens < jsd_ens-haloy .or. jj_ens > jed_ens+haloy ) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": jj_ens = ",I8)') mpp_pe() ,jj_ens
+             end if
+
+             model_loc%lon = T_grid%x(ii_ens, jj_ens)
+             model_loc%lat = T_grid%y(ii_ens, jj_ens)
+             model_loc%lon = model_loc%lon+360.0
+             if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+
+             assim_flag = 1
+
+             ! do not do assim over some islands
+             ! East bound
+!!$             if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 278.0 .and. model_loc%lon < 305.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat >= 17.0 .and. model_loc%lat <= 25.0)&
+!!$                  & .and. (model_loc%lon > 262.0 .and. model_loc%lon <= 278.0) ) assim_flag = 0
+!!$             if ( (model_loc%lat > -27.0 .and. model_loc%lat < -18.0)&
+!!$                  & .and. (model_loc%lon > 300.0 .and. model_loc%lon < 330.0) ) assim_flag = 0
+
+             ! do not do assim over some islands
+             ! West bound
+!!$             if ( (model_loc%lat > -15.0 .and. model_loc%lat < 30.0)&
+!!$                  & .and. (model_loc%lon > 25.0 .and. model_loc%lon < 100.0) ) assim_flag = 0
+
+             if ( assim_flag /= 0 ) then ! (7)
+                assim_flag = 1
+
+                ! for test of estimate uncertainty of analysis !!!!!!!!
+                
+!!$                if ( (obs_loc%lat > -1.0 .and. obs_loc%lat < 1.0) .and.&
+!!$                     & (obs_loc%lon > 139.0 .and. obs_loc%lon < 141.0) ) assim_flag = 0
+
+                ! do not allow obs to have impact on grids separated by continents
+                ! East bound
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 260.0 .and. model_loc%lon < 280.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 240.0 .and. obs_loc%lon < 260.0) ) assim_flag = 0
+                if ( (model_loc%lat > 18.0 .and. model_loc%lon > 240.0 .and. model_loc%lon < 260.0) .and. &
+                     & (obs_loc%lat > 18.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 280.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon > 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon < 270.0) ) assim_flag = 0
+                if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon < 270.0) &
+                     & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon > 270.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon > 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon < 275.0) ) assim_flag = 0
+                if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon < 275.0) &
+                     & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon > 275.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 290.0 .and. model_loc%lon < 360.0 ) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 110.0 .and. obs_loc%lon < 290.0) ) assim_flag = 0
+                if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                     & model_loc%lon > 110.0 .and. model_loc%lon < 290.0) .and. &
+                     & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                     & obs_loc%lon > 290.0 .and. obs_loc%lon < 360.0) ) assim_flag = 0
+
+                ! west bound
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon > 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+                if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon > 100.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon > 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon < 77.0) ) assim_flag = 0
+                if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon < 77.0) .and. &
+                     & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon > 77.0) ) assim_flag = 0
+
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon > 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon < 110.0) ) assim_flag = 0
+!!$                if ( (model_loc%lat > -8.0 .and. model_loc%lat < 5.0 .and. model_loc%lon < 110.0)&
+!!$                     & .and. (obs_loc%lat > -8.0 .and. obs_loc%lat < 5.0 .and. obs_loc%lon > 110.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 145.0 .and. model_loc%lon < 165.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 125.0 .and. obs_loc%lon < 145.0) ) assim_flag = 0
+                if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                     & model_loc%lon > 125.0 .and. model_loc%lon < 145.0) .and. &
+                     & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                     & obs_loc%lon > 145.0 .and. obs_loc%lon < 165.0) ) assim_flag = 0
+
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 25.0 .and. model_loc%lon < 100.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 0.0 .and. obs_loc%lon < 25.0) ) assim_flag = 0
+                if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                     & model_loc%lon > 0.0 .and. model_loc%lon < 25.0) .and. &
+                     & (obs_loc%lat > -35.0 .and. obs_loc%lat < 20.0 .and. &
+                     & obs_loc%lon > 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+
+                ifblock_6: if ( assim_flag /= 0 ) then ! (6)
+                   dist = get_dist(model_loc, obs_loc)
+                   dist = RADIUS * sqrt(dist)
+
+                   cov_factor = cov_factor_t 
+
+!!$                   ifblock_5: if ( cov_factor > 0.0 ) then ! (5) redundent with cov_factor_t >0 !!
+
+                      ifblock_4_4: if ( Profiles(lji0)%variable == TEMP_ID .or. &
+                           & Profiles(lji0)%variable == SALT_ID .or. &
+                           & Profiles(lji0)%variable == WOAT_ID .or. &
+                           & Profiles(lji0)%variable == WOAS_ID ) then ! T,S -> T,S (4.4)
+                         kk_bot = Profiles(lji0)%k_index(k0)
+                         depth_bot = Profiles(lji0)%depth(k0)
+                         doloop_4: do kk = 1, k0 ! (4)
+                            if ( Profiles(lji0)%flag(kk) ) then ! add each level flag
+                               idx_obs = index_obs(lji0,kk)
+                               if (idx_obs == 0 ) then 
+                                  write (UNIT=stdout_unit, FMT='("lji0 = ",I8)') lji0
+                               end if
+
+                               do j_ens=1, ens_size
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  v2_h_hfq = 0.0 !lulv
+                                  v2_l_hfq = 0.0 !lulv
+                                  if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                       & Profiles(lji0)%variable == WOAT_ID ) then
+                                     do i_idx=1, 4
+                                        ind_temp_h = obs_def(idx_obs)%state_var_index(i_idx)
+                                        ind_temp_l = obs_def(idx_obs)%state_var_index(i_idx+4)
+                                        v2_h = v2_h + ens_tmp(ind_temp_h)*obs_def(idx_obs)%coef(i_idx) !lulv 2020-04-17
+                                        v2_l = v2_l + ens_tmp(ind_temp_l)*obs_def(idx_obs)%coef(i_idx) !lulv 2020-04-17
+                                        v2_h_hfq = v2_h_hfq + ensb(ind_temp_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                        v2_l_hfq = v2_l_hfq + ensb(ind_temp_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                     end do
+                                     enso_temp(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                     enso_temp_hfq(j_ens) = v2_h_hfq*obs_def(idx_obs)%coef(5) + v2_l_hfq*obs_def(idx_obs)%coef(6) !lulv
+                                  end if
+                                  v2_h = 0.0
+                                  v2_l = 0.0
+                                  v2_h_hfq = 0.0 !lulv
+                                  v2_l_hfq = 0.0 !lulv
+                                  if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                       & Profiles(lji0)%variable == WOAS_ID ) then
+                                     do i_idx=1, 4
+                                        ind_salt_h = obs_def(idx_obs)%state_var_index(i_idx)+nk*blk
+                                        ind_salt_l = obs_def(idx_obs)%state_var_index(i_idx+4)+nk*blk
+                                        v2_h = v2_h + ens_tmp(ind_salt_h)*obs_def(idx_obs)%coef(i_idx) !chenyuhu find it's missing
+                                        v2_l = v2_l + ens_tmp(ind_salt_l)*obs_def(idx_obs)%coef(i_idx) !chenyuhu find it's missing
+                                        v2_h_hfq = v2_h_hfq + ensb(ind_salt_h, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                        v2_l_hfq = v2_l_hfq + ensb(ind_salt_l, j_ens)*obs_def(idx_obs)%coef(i_idx) !lulv
+                                     end do
+                                     enso_salt(j_ens) = v2_h*obs_def(idx_obs)%coef(5) + v2_l*obs_def(idx_obs)%coef(6)
+                                     enso_salt_hfq(j_ens) = v2_h_hfq*obs_def(idx_obs)%coef(5) + v2_l_hfq*obs_def(idx_obs)%coef(6) !lulv
+                                  end if
+                               end do
+
+                               if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                    & Profiles(lji0)%variable == WOAT_ID ) then
+                                  if ( Profiles(lji0)%variable == TEMP_ID ) then
+                                     obs_var_t = sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAT_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology                                  
+
+                                    obs_var_t = woa_factor*sigma_o_t*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index
+                                  j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_t = obs_var_t * obs_var_t
+                                  obs_var_t_oi = 25.0*obs_var_t
+                                  std_bg = 0.0
+                                  ! call obs_increment_prf_eta_hyb(enso_temp, ens_size, obs_value, obs_var_t,&
+                                       ! & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_bg)
+                                  call obs_increment_prf_eta_hyb_stn(enso_temp_hfq, enso_temp, ens_size, obs_value, obs_var_t,&
+                                       & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_bg) !lulv
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_temp(:)*obs_inc_eakf_temp(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmat_cut) then
+                                     obs_inc_eakf_temp(:) = obs_inc_sigmat_cut/obs_inc_sigma*obs_inc_eakf_temp(:)
+                                  end if
+                                  
+!if ((model_loc%lon > 299.0 .and. model_loc%lon < 300.0) .and. (model_loc%lat > 37.0 .and. model_loc%lat < 38.0)) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_temp=',enso_temp,'obs_inc_eakf_temp=',obs_inc_eakf_temp,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+
+                               if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                    & Profiles(lji0)%variable == WOAS_ID ) then
+                                  if (Profiles(lji0)%variable == SALT_ID) then
+                                     obs_var_s = sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if
+
+                                  if ( Profiles(lji0)%variable == WOAS_ID ) then
+
+                                    ! snz add on dec. 31, 2011 to differ the impact of woa climatology
+                                    if (abs(Profiles(lji0)%lat) <= woa_lat) then
+                                      if (abs(Profiles(lji0)%lat) <= 20.0) then
+                                        depth_lat = 500.0
+                                      else
+                                        depth_lat = (woa_lat-Profiles(lji0)%lat)/(woa_lat-20.0)*500.0
+                                      end if
+                                      if (Profiles(lji0)%depth(kk) <= depth_lat) then
+                                        woa_factor = factor_woat
+                                      else
+                                        woa_factor = (Profiles(lji0)%depth(kk)-depth_lat)/(1500.0- &
+                                          depth_lat)*factor_woab+(1500.0-Profiles(lji0)%depth(kk))/ &
+                                          (1500.0-depth_lat)*factor_woat
+                                      end if
+                                    else
+                                      woa_factor = Profiles(lji0)%depth(kk)/1500.0*factor_woab+ &
+                                        (1500.0-Profiles(lji0)%depth(kk))/1500.0*factor_woat
+                                    end if
+                                    if ((factor_woab-woa_factor)>1. .or. (woa_factor-factor_woat)>1.) then
+                                      write (UNIT=stdout_unit, FMT='("PE ",I5,": woa_factor = ",e12.6)') mpp_pe(), woa_factor
+                                      stop
+                                    end if
+                                    ! end of snz add on dec. 31, 2011 to differ the impact of woa climatology
+
+                                    obs_var_s = woa_factor*sigma_o_s*exp(-Profiles(lji0)%depth(kk)/e_flder_oer)
+                                  end if ! for WOAS_ID
+
+                                  i_o=Profiles(lji0)%i_index; j_o=Profiles(lji0)%j_index
+                                  k_o=Profiles(lji0)%k_index(kk)
+                                  if ( k_o < 1 ) k_o = 1
+                                  if ( i_o < 1 ) i_o = 1
+                                  if ( i_o > ni ) i_o = ni
+                                  if ( j_o < 1 ) j_o = 1
+                                  if ( j_o > nj ) j_o = nj
+                                  obs_value = Profiles(lji0)%data(kk)
+                                  obs_var_s = obs_var_s * obs_var_s
+                                  obs_var_s_oi = 25.0*obs_var_s
+                                  std_bg = 0.0
+                                  ! call obs_increment_prf_eta_hyb(enso_salt, ens_size, obs_value, obs_var_s,&
+                                       ! & obs_inc_eakf_salt, obs_var_s_oi, obs_inc_oi_salt, std_bg)
+                                  call obs_increment_prf_eta_hyb_stn(enso_salt_hfq, enso_salt, ens_size, obs_value, obs_var_s,&
+                                       & obs_inc_eakf_salt, obs_var_s_oi, obs_inc_oi_salt, std_bg) !lulv
+                                  obs_inc_sigma = sqrt(sum(obs_inc_eakf_salt(:)*obs_inc_eakf_salt(:))/ens_size)
+                                  if (obs_inc_sigma > obs_inc_sigmas_cut) then
+                                     obs_inc_eakf_salt(:) = obs_inc_sigmas_cut/obs_inc_sigma*obs_inc_eakf_salt(:)
+                                  end if
+!if (abs(sum(obs_inc_eakf_salt(:))/ens_size) > 2.0) then
+!  print*,'pe=',mpp_pe(),'obs_value=',obs_value,'enso_salt=',enso_salt,'obs_inc_eakf_salt=',obs_inc_eakf_salt,'lon,lat for',lji0,'prf=',Profiles(lji0)%lon,Profiles(lji0)%lat
+!end if
+                               end if
+  
+                               kk0 = Profiles(lji0)%k_index(kk)
+
+                               if ( kk0 <= 1 ) then
+                                  kk1 = 1
+                                  kk2 = kk1 + max_impact_levels
+                                  cutoff_vd = d_g(2) - d_g(1)
+                               else if ( kk0 < kk_bot ) then
+                                  kk1 = kk0 - max_impact_levels + 1
+                                  kk2 = kk0 + max_impact_levels
+                                  cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                               else ! (for kk0=kk_bot)
+                                  if ( depth_bot <= 500.0 ) then
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     kk2 = kk0 + max_impact_levels
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  else ! (for kk0=kk_bot) .and. (depth_bot > 500.0)
+                                     kk1 = kk0 - max_impact_levels + 1
+                                     if ( (kk0+5*max_impact_levels) <= nk ) then ! extend 10 lvls
+                                        kk2 = kk0 + 4*max_impact_levels
+                                     else
+                                        kk2 = nk
+                                     end if
+                                     cutoff_vd = d_g(kk0+1) - d_g(kk0)
+                                  end if
+                               end if
+
+                               std_max = sgm_tgm(1)
+                               do k_o0=2, nk
+                                  if ( std_max < sgm_tgm(k_o0) ) std_max= sgm_tgm(k_o0)
+                               end do
+                               if ( std_max > 0.0 ) sgm_tgm(:) = sgm_tgm(:)/std_max
+
+                               ens_inc_bt_t = 0.0
+                               ens_inc_bt_s = 0.0
+
+                               doloop_3: do kk_ens=kk1, kk2 ! (3)
+                                  t_tau   = (kk_ens-1)*blk + i_h
+                                  s_tau   = nk*blk + t_tau
+
+                                  ifblock_2: if ( ens_mean(t_tau) /= 0.0 ) then ! (2) using ens_mean(t_tau) as mask
+                                     if ( kk_ens <= kk0+max_impact_levels ) then
+                                        cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                             & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                     else ! for deeper than kk_bot+max_impact_levels
+                                        cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                             & d_g(kk0+max_impact_levels)), &
+                                             & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                     end if
+
+                                     cov_factor = cov_factor_v * cov_factor_t
+
+                                     ifblock_1: if ( cov_factor > 0.0 .and. &
+                                          Profiles(lji0)%depth(kk) <= depth_cut ) then ! (1)  
+                                        ifblock_0_60: if ( Profiles(lji0)%variable == TEMP_ID .or.&
+                                             & Profiles(lji0)%variable == WOAT_ID ) then ! (0.60)
+                                           ! using temperature adjusts temperature and salinity
+                                           ! temperature itself
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = temp_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = temp_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+
+                    if ( local_tropatl_box ) then
+                       if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                       end if
+                    end if 
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc(:) = 0.0
+
+                                           ifblock_0_60_1: if ( sum(ens(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = mpp_pe()*k*kk
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                 call update_from_obs_inc_prf_hyb(enso_temp_hfq,& !chenyuhu change enso_temp to enso_temp_hfq
+                                                      & obs_inc_eakf_temp, obs_inc_oi_temp, ensb(t_tau, :),& !chenyuhu change ens to ensb
+                                                      & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                 !chenyuhu   ens_bt_t(:) = ens(t_tau, :)
+                                                    !ens_bt_t(:) = enso_temp_hfq(:)
+                                                    ens_bt_t(:) = ensb(t_tau,:) !lulv 20201123
+                                                    ens_inc_bt_t(:) = ens_inc(:)
+                                                    std_oi_bt_t = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_t, ens_inc_bt_t,&
+                                                  !chenyuhu    & ens(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & ensb(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & std_oi_bt_t, std_oi_g)
+                                                 ens(t_tau, :) = ens(t_tau, :) + ens_inc(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              doloop_0: do j_ens=1,1 !lulv 20201125 ens_size ! (0)
+                                                 if ( ens(t_tau, j_ens) > 39.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                    ens(t_tau, j_ens) = 39.0
+                                                 end if
+                                                 if ( ens(t_tau, j_ens) < -4.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F25.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                    ens(t_tau, j_ens) = -4.0
+                                                 end if
+                                              end do doloop_0 ! handle the extremeties (0)
+                                           end if ifblock_0_60_1
+
+                                           ! temperature impact salinity
+                                           ifblock_0_50: if ( temp_to_salt ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                          if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+!                       if ( local_tropatl_ts ) then
+!                          if ( (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon >280.0 ) &
+!                             & .or. (model_loc%lat <15.0 .and. model_loc%lat > -15.0 .and. model_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+!                              dist = 2.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+!                         end if
+!                       end if
+
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc(:) = 0.0
+
+                                              ifblock_0_50_1: if ( sum(ens(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_temp_hfq,& !chenyuhu enso_temp to enso_temp_hfq
+                                                         & obs_inc_eakf_temp, obs_inc_oi_temp, ensb(s_tau, :),& !chenyuhu ens to ensb
+                                                         & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                    !chenyuhu   ens_bt_s(:) = ens(s_tau, :)
+                                                       !ens_bt_s(:) = enso_temp_hfq(:)
+                                                       ens_bt_s(:) = ensb(s_tau,:) !lulv 20201123
+                                                       ens_inc_bt_s(:) = ens_inc(:)
+                                                       std_oi_bt_s = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_s, ens_inc_bt_s,&
+                                                      !chenyuhu   ens(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         ensb(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & std_oi_bt_s, std_oi_g)
+                                                    ens(s_tau, :) = ens(s_tau, :) + ens_inc(:)
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 doloop_00: do j_ens = 1,1 !lulv 20201125 ens_size ! (0)
+                                                    if ( ens(s_tau, j_ens) > 44.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)') &
+                                                            & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                       ens(s_tau, j_ens) = 44.0
+                                                    end if
+
+                                                    if ( ens(s_tau, j_ens) < 0.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                       ens(s_tau, j_ens) = 0.0
+                                                    end if
+                                                 end do doloop_00 ! handle the extremeties (0)
+                                              end if ifblock_0_50_1
+                                           end if ifblock_0_50 ! impact salinity or not (0.5)
+
+                                        end if ifblock_0_60 ! finish processing temperature profiles (0.60)
+
+                                        ifblock_0_61: if ( Profiles(lji0)%variable == SALT_ID .or.&
+                                             & Profiles(lji0)%variable == WOAS_ID ) then ! (0.61)
+                                           ! using salinity adjusts salinity and temperature
+                                           ! salinity itself
+                                           if ( kk_ens <= kk0+max_impact_levels ) then
+                                              cov_factor_v = comp_cov_factor(abs(d_g(kk_ens) -&
+                                                   & Profiles(lji0)%depth(kk)), cutoff_vd)
+                                           else ! for deeper than kk_bot+max_impact_levels
+                                              cov_factor_v = comp_cov_factor((d_g(kk_ens) -&
+                                                   & d_g(kk0+max_impact_levels)), &
+                                                   & (d_g(kk2)-d_g(kk0+max_impact_levels)))
+                                           end if
+
+                                           if ( abs(obs_loc%lat) < 80.0 ) then
+                                              dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                           else
+                                              dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                           end if
+                       if ( local_tropatl_box ) then
+                        if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+
+                      if ( global_tropatl_s2s ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                           cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                           cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                           ass_variable = 1
+                                           ens_inc(:) = 0.0
+                                           ifblock_0_61_1: if ( sum(ens(s_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              cor_oi = 0.0
+
+                                              flag_hyb = 1
+
+                                              if ( kk_ens <= kk0+max_impact_levels ) then
+                                                 cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                 call update_from_obs_inc_prf_hyb(enso_salt_hfq,& !chenyuhu enso_salt to enso_salt_hfq
+                                                      & obs_inc_eakf_salt, obs_inc_oi_salt, ensb(s_tau, :),& !chenyuhu ens to ensb
+                                                      & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                      & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                 ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                                 if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                 !chenyuhu   ens_bt_s(:) = ens(s_tau, :)
+                                                    !ens_bt_s(:) = enso_salt_hfq(:)
+                                                    ens_bt_s(:) = ensb(s_tau,:) !lulv 20201123
+                                                    ens_inc_bt_s(:) = ens_inc(:)
+                                                    std_oi_bt_s = 0.0
+                                                 end if
+                                              !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                              else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                 cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                 call update_from_inc_bt_hyb(ens_bt_s, ens_inc_bt_s,&
+                                                  !chenyuhu    & ens(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & ensb(s_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                      & std_oi_bt_s, std_oi_g)
+                                                 ens(s_tau, :)   = ens(s_tau, :) + ens_inc(:)
+                                              end if
+
+                                              ! limit the unreasonable values if applicable
+                                              do j_ens = 1, ens_size ! (0)
+                                                 if ( ens(s_tau, j_ens) > 44.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                    ens(s_tau, j_ens) = 44.0
+                                                 end if
+                                                 if ( ens(s_tau, j_ens) < 0.0 ) then
+                                                    write (UNIT=stdout_unit, FMT='("S(",3I5,") = ",F15.8)')&
+                                                         & ii_ens, jj_ens, kk_ens, ens(s_tau,j_ens)
+                                                    ens(s_tau, j_ens) = 0.0
+                                                 end if
+                                              end do ! handle the extremeties (0)
+                                           end if ifblock_0_61_1
+
+                                           ! salinity impact temperature
+                                           ifblock_0_5: if ( salt_to_temp ) then ! (0.5)
+                                              if ( abs(obs_loc%lat) < 80.0 ) then
+                                                 dist0 = salt_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                              else
+                                                 dist0 = salt_dist*cos(80.0*DEG_TO_RAD)*depth_factor
+                                              end if
+                       if ( local_tropatl_box ) then
+                         if ( (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon >280.0 ) &
+                             & .or. (model_loc%lat <10.0 .and. model_loc%lat > -10.0 .and. model_loc%lon < 20.0 )) then
+                            if ( abs(model_loc%lat) <= 5.0 ) then
+                              dist0 = salt_dist*0.25*depth_factor
+                            else
+                              dist0 = (1.0-(abs(model_loc%lat)-5.0)/5.0)*0.25*depth_factor*salt_dist+ &
+                                   &  (abs(model_loc%lat)-5.0)/5.0*1.0*depth_factor*salt_dist
+                            end if
+                         end if
+                       end if 
+                      if ( local_tropatl_s2t ) then
+                       if ( (obs_loc%lat < tropatl_s2t_latn .and. obs_loc%lat > tropatl_s2t_lats .and. obs_loc%lon >280.0 ) &
+                         & .or. (obs_loc%lat < tropatl_s2t_latn  .and. obs_loc%lat > tropatl_s2t_lats  .and. obs_loc%lon < 20.0 )) then
+!                            if ( abs(model_loc%lat) <= 10.0 ) then
+                           dist = 3.0*dist0
+!                            else
+!                              dist = (1.0-(abs(model_loc%lat)-10.0)/5.0)*2.0*dist0+(abs(model_loc%lat)-10.0)/5.0*dist
+!                            end if
+                        end if
+                      end if
+                     if ( global_tropatl_s2t ) then
+                      if ( obs_loc%lat < global_s2t_latn .and. obs_loc%lat > global_s2t_lats ) then
+                           dist = 3.0*dist0
+                       end if
+                     end if
+
+                                              cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                                   & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                              cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                              ass_variable = 2
+                                              ens_inc(:) = 0.0
+                                              ifblock_0_5_1: if ( sum(ens(t_tau, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                                 std_oi_g = 0.0
+                                                 std_oi_o = 0.0
+                                                 cor_oi = 0.0
+
+                                                 flag_hyb = 1
+
+                                                 if ( kk_ens <= kk0+max_impact_levels ) then
+                                                    cov_factor = cov_factor*sgm_tgm(kk_ens)
+                                                    call update_from_obs_inc_prf_hyb(enso_salt_hfq,& !chenyuhu enso_salt to enso_salt_hfq
+                                                         & obs_inc_eakf_salt, obs_inc_oi_salt, ensb(t_tau, :),& !chenyuhu ens to ensb
+                                                         & ens_size, ens_inc, cov_factor, cor_oi, std_oi_o,&
+                                                         & std_oi_g, ass_method, ass_variable, flag_hyb)
+                                                    ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+                                                    if ( kk0 == kk_bot .and. kk_ens == kk0+max_impact_levels ) then
+                                                   !chenyuhu    ens_bt_t(:) = ens(t_tau, :)
+                                                       !ens_bt_t(:) = enso_salt_hfq(:)
+                                                       ens_bt_t(:) = ensb(t_tau,:) !lulv 20201123
+                                                       ens_inc_bt_t(:) = ens_inc(:)
+                                                       std_oi_bt_t = 0.0
+                                                    end if
+                                                 !::sdu:: ELSE ! only for kk0=kk_bot and depth_bot > 500.0
+                                                 else if ( kk0 == kk_bot .and. depth_bot > 500.0 ) then 
+                                                    cov_factor_v = cov_factor_v*sgm_tgm(kk_ens)
+                                                    call update_from_inc_bt_hyb(ens_bt_t, ens_inc_bt_t,&
+                                                     !chenyuhu    & ens(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & ensb(t_tau, :), ens_size, ens_inc, cov_factor_v,&
+                                                         & std_oi_bt_t, std_oi_g)
+                                                    ens(t_tau, :)   = ens(t_tau, :) + ens_inc(:)
+                                                 end if
+
+                                                 ! limit the unreasonable values if applicable
+                                                 do j_ens = 1,1 !lulv 20201125 ens_size ! (0)
+                                                    if ( ens(t_tau, j_ens) > 39.0 ) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                       ens(t_tau, j_ens) = 39.0
+                                                    end if
+                                                    if(ens(t_tau, j_ens) < -4.0) then
+                                                       write (UNIT=stdout_unit, FMT='("T(",3I5,") = ",F15.8)')&
+                                                            & ii_ens, jj_ens, kk_ens, ens(t_tau,j_ens)
+                                                       ens(t_tau, j_ens) = -4.0
+                                                    end if
+                                                 end do ! handle the extremeties (0)
+                                              end if ifblock_0_5_1
+                                           end if ifblock_0_5 ! impact temperature or not (0.5)
+
+                                        end if ifblock_0_61 ! finish processing slinity profiles (0.61)
+
+                                     end if ifblock_1 ! only use obs which has cov_factor > 0.0 (1)
+                                  end if ifblock_2 ! only do non-masked points (2)
+                               end do doloop_3 ! finish adjustments for related model levels (3)
+
+                               if ( Profiles(lji0)%depth(kk) < d4ass_txty .and. &
+                                    & (model_loc%lat > ass_txty_lat_start .and. &
+                                    & model_loc%lat < ass_txty_lat_end) ) then ! lat and depth
+                                  if ( ens_mean(i_h) /= 0.0 ) then ! ens_mean = 0.0
+                                     dist0 = txty_dist*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                                     cov_factor_h = comp_cov_factor(dist, dist0)*&
+                                          & cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                                     cov_factor_v = comp_cov_factor(Profiles(lji0)%depth(kk), d4ass_txty)
+                                     cov_factor = cov_factor_h * cov_factor_v * cov_factor_t
+                                     ass_variable = 2
+
+                                     if ( Profiles(lji0)%variable == TEMP_ID ) then ! TEMP_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                                   & obs_inc_oi_temp, ens(i_uflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_uflx, :) = ens(i_uflx, :) + ens_inc(:)
+                                           end if
+
+                                           ens_inc(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                                   & obs_inc_oi_temp, ens(i_vflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_vflx, :) = ens(i_vflx, :) + ens_inc(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! TEMP_ID
+
+                                     if ( Profiles(lji0)%variable == SALT_ID ) then ! SALT_ID
+                                        if ( ass_txty ) then ! for assim txty
+                                           ens_inc(:) = 0.0
+                                           i_uflx  = 2*nk*blk + i_h
+                                           if ( sum(ens(i_uflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt, obs_inc_eakf_salt,&
+                                                   & obs_inc_oi_salt, ens(i_uflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_uflx, :) = ens(i_uflx, :) + ens_inc(:)
+                                           end if
+
+                                           ens_inc(:) = 0.0
+                                           i_vflx  = 2*nk*blk + blk + i_h
+                                           if ( sum(ens(i_vflx, :)) /= 0.0 .and. cov_factor /= 0.0 ) then
+                                              std_oi_g = 0.0
+                                              std_oi_o = 0.0
+                                              call update_from_obs_inc(enso_salt, obs_inc_eakf_salt,&
+                                                   & obs_inc_oi_salt, ens(i_vflx, :), ens_size,&
+                                                   & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                                   & ass_method, ass_variable)
+                                              ens(i_vflx, :) = ens(i_vflx, :) + ens_inc(:)
+                                           end if
+                                        end if ! finish assim txty
+
+                                     end if ! SALT_ID
+                                  end if ! ens_mean=0.0
+                               end if ! lat and depth
+                            end if ! add each level flag
+                         end do doloop_4 ! go through one profile column (4)
+                      end if ifblock_4_4 ! T,S -> T,S,U,V,tx,ty; ETA -> T,S,U,V (4.4)
+!!$                   end if ifblock_5 ! only adjust points that have a positive cov_factor (d&t) (5)
+                end if ifblock_6 ! get rid of land points (6)
+             end if ! get rid of obs crossing the basin bound (optional) (7)
+          end do doloop_8 ! finish the adjustments for all related model columns (8)
+       end if ! control 10d time window (5+ & 5-)
+       ! if (ngrids == 0) print*,'ngrids=',ngrids,'in pe=',mpp_pe()
+
+       end if ! ifblock prf accepted
+
+    end do doloop_9 ! finish all profiles (9)
+
+    !===== Eakf assim finish =====================================
+
+    ! Compute ensemble mean of current assimilated state
+    !
+    ! Redistribute the sub ensemble state vector ens(:, :) back to the model grids
+    ! in the local-domain.
+    call red_ens(temp_ens_tau, salt_ens_tau, &
+         & uflx_ens, vflx_ens, &
+         & isd_ens, ied_ens, jsd_ens, jed_ens,&
+         & halox, haloy, nk, ens, ass_method)
+
+    if ( debug_eakf ) then
+       write (UNIT=stdout_unit, FMT='("PE ",I5,": finished red_ens")') mpp_pe()
+    end if
+
+!!$    ! store the adj amount in corr_t(s)
+!!$    do j_ens=1, ens_size
+!!$       corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & temp_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_t(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$       corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk) =&
+!!$            & salt_ens_tau(j_ens)%data(isd:ied,jsd:jed,1:nk) - corr_s(j_ens)%data(isd:ied,jsd:jed,1:nk)
+!!$    end do
+!!$    ! extend the adj amount to the deep water
+!!$    do j_ens=1, ens_size
+!!$       do j=jsd, jed
+!!$          do i=isd, ied
+!!$             obs_only: do k = 3, nk ! how about obs only ssh?
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) == 0.0 ) exit obs_only
+!!$                if ( corr_t(j_ens)%data(i,j,k) == 0.0 .and. corr_s(j_ens)%data(i,j,k) /= 0.0 ) then
+!!$                   write (UNIT=stdout_unit, FMT='("corr_t(",I8,")%data(",3I5,") = ",F15.8)')&
+!!$                        & j_ens, i, j, k, corr_t(j_ens)%data(i,j,k)
+!!$                   write (UNIT=stdout_unit, FMT='("corr_s(",I8,")%data(",3I5,") = ",F25.8)')&
+!!$                        & j_ens, i, j, k, corr_s(j_ens)%data(i,j,k)
+!!$                end if
+!!$             end do obs_only
+!!$             nk_adj = k-1
+!!$             if ( d_g(nk_adj) <= 200.0 ) e_flder_aed = 20.0
+!!$             if ( d_g(nk_adj) > 200.0 .and. d_g(nk_adj) <= 500.0 ) e_flder_aed = 50.0
+!!$             if ( d_g(nk_adj) > 500.0 .and. d_g(nk_adj) <= 1000.0 ) e_flder_aed = 200.0
+!!$             if ( d_g(nk_adj) > 1000.0 ) e_flder_aed = 500.0
+!!$             do k=nk_adj+1, nk
+!!$                zfcn = exp(-(d_g(k)-d_g(nk_adj))/e_flder_aed)
+!!$                temp_ens_tau(j_ens)%data(i,j,k) = temp_ens_tau(j_ens)%data(i,j,k) + corr_t(j_ens)%data(i,j,nk_adj)*zfcn
+!!$                salt_ens_tau(j_ens)%data(i,j,k) = salt_ens_tau(j_ens)%data(i,j,k) + corr_s(j_ens)%data(i,j,nk_adj)*zfcn
+!!$             end do
+!!$          end do
+!!$       end do
+!!$    end do
+
+    call obs_end()
+
+    first_run_call = .false.
+    deallocate(list_close_grids)
+!    call mpp_clock_end(id_eakf_total)
+  end subroutine ens_hfq_filter !lulv
+
+!lulv 20201127 add ensemble_filter_sfc_hea
+  subroutine ensemble_filter_sfc_hea(T_ens_hea, temp_ens_tau, salt_ens_tau, &
+       & uflx_ens, vflx_ens, &
+       & sst_climo, isc, iec, jsc, jec, halox, haloy, T_grid, m_time)
+
+    type(field_type), dimension(:,:), intent(inout) :: T_ens_hea !lulv 20201127
+    type(field_type), dimension(:), intent(inout) :: temp_ens_tau, salt_ens_tau
+    type(field_type), dimension(:), intent(inout) :: uflx_ens, vflx_ens
+    type(obs_clim_type), intent(in) :: sst_climo
+    type(grid_type), intent(in) :: T_grid
+    type(time_type), intent(in) :: m_time
+    integer, intent(in) :: isc, iec, jsc, jec, halox, haloy
+
+    real :: sigma_o_sst = 0.5
+    real :: sigma_o_sss = 0.1
+    real :: sigma_o_ssh = 0.05
+    logical :: salt_to_temp = .false.
+    logical :: temp_to_salt = .false.
+    logical :: temp_to_tau_xy = .false. !lulv 20201127
+    real :: dist_temp = 1000.0e3
+    real :: dist_salt = 500.0e3
+    real :: depth_coast = 1000.0
+    real :: obs_inc_sigmasst_cut = 2.0
+
+    integer :: ii_do = 10
+    integer :: jj_do = 10
+    integer :: kk_do = 10
+
+!! x1y add sst ramping
+    logical :: sst_ramping = .false.
+    logical :: sst_ramping_natl = .false.
+    logical :: kk_do_lat = .false.
+    logical :: sstlocal_tropics_min = .false.
+    real :: kk_do_lat_h = 30.0
+    real :: kk_do_lat_l = 15.0
+    real :: sst_lat_n = 60.0
+    real :: sst_lat_s = -55.0
+
+    namelist /eakf_sfc_hea_nml/sigma_o_sst, sigma_o_sss, sigma_o_ssh, ii_do, jj_do, kk_do, & !lulv 20201127
+         & dist_temp, dist_salt, salt_to_temp, temp_to_salt, temp_to_tau_xy, depth_coast, obs_inc_sigmasst_cut, & !lulv 20201127
+         & sst_ramping, sst_lat_n, sst_lat_s, sst_ramping_natl, kk_do_lat, kk_do_lat_h, kk_do_lat_l,&
+         & sstlocal_tropics_min
+
+    integer :: ii_ens, jj_ens, model_size
+    integer :: i, j, k, j_ens, npe, npes, ens_size, pe_curr, ni, nj, nk
+    integer :: i_o, j_o, i_m, j_m
+    integer :: unit, ierr, io
+    integer :: stdout_unit
+
+    integer :: ass_method, ass_variable, assim_flag
+    real :: cov_factor_h, cov_factor_v, cov_factor, dist, dist0, obs_var_t, obs_value
+    real :: std_oi_o, cor_oi, std_oi_g
+    real :: obs_var_t_oi
+    !-----------------------------------------------------
+    real :: prf_depth, depth_factor, depth_lat, obs_inc_sigma
+    integer :: idx_depth
+    !-----------------------------
+    real :: sst_ramping_factor, dlat
+    integer :: kk_do2
+
+    type(loc_type) :: model_loc, obs_loc
+
+    stdout_unit = stdout()
+
+    ni = T_grid%ni
+    nj = T_grid%nj
+    nk = T_grid%nk
+    ens_size = size(temp_ens_tau)
+
+    npes = mpp_npes()
+    pe_curr = mpp_pe()
+
+    ! Read namelist for run time control
+    if ( file_exist('input.nml') ) then
+       unit = open_namelist_file()
+       read(unit, nml = eakf_sfc_hea_nml, iostat=io) !lulv 20201127
+       call close_file(unit)
+    else
+       ! Set mystat to an arbitrary positive number if input.nml does not exist.
+       io = 100
+    end if
+
+    if ( check_nml_error(io, 'eakf_sfc_hea_nml') < 0 ) then
+       if ( mpp_pe() == mpp_root_pe() ) then
+          call error_mesg('eakf_mod::ensemble_filter_sfc_hea', 'EAKF_SFC_HEA_NML not found in input.nml. Using defaults.', WARNING)
+       end if
+    end if
+
+    ass_method = 1
+    call init_model(isc, iec, jsc, jec, halox, haloy, nk, ass_method)
+    model_size = get_model_size()
+
+    if ( .not.module_initialized ) then
+       call eakf_oda_init(MODEL_SIZE=model_size, ENS_SIZE=ens_size, ISD=isc, IED=iec, JSD=jsc, JED=jec, NK=nk)
+    end if
+
+    d_g(:) = T_grid%z(:)
+
+    obs_var_t = sigma_o_sst*sigma_o_sst
+
+    do j = jsc-haloy, jec+haloy
+       do i = isc-halox, iec+halox
+
+          i_o = i
+          j_o = j
+          !      if ( i_o <= 0 ) i_o = i_o + ni
+          !      if ( i_o > ni ) i_o = i_o - ni
+
+          if ( j_o > 0 .and. j_o <= nj ) then ! limit j_o
+
+             obs_value = sst_climo%sst_obs(i,j)
+             std_oi_o = 0.0
+
+             do j_ens = 1, ens_size
+                enso_temp(j_ens) = temp_ens_tau(j_ens)%data(i, j, 1)
+                enso_temp_hea(j_ens) = T_ens_hea(1,j_ens)%data(i, j, 1) !lulv 20201127
+             end do
+
+             obs_var_t_oi = 25.0*obs_var_t
+             obs_inc_eakf_temp = 0.0
+             obs_inc_oi_temp = 0.0
+             !call obs_increment_prf_eta_hyb(enso_temp, ens_size, obs_value, obs_var_t, &
+             !     & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_oi_o)
+             call obs_increment_prf_eta_hyb_stn(enso_temp_hea, enso_temp, ens_size, obs_value, obs_var_t, & !lulv 20201127
+                  & obs_inc_eakf_temp, obs_var_t_oi, obs_inc_oi_temp, std_oi_o)
+             if (abs(obs_value) > 100.0 ) obs_inc_eakf_temp(:) = 0.0
+             obs_inc_sigma = sqrt(sum(obs_inc_eakf_temp(:)*obs_inc_eakf_temp(:))/ens_size)
+             if (obs_inc_sigma > obs_inc_sigmasst_cut) then
+                obs_inc_eakf_temp(:) = obs_inc_sigmasst_cut/obs_inc_sigma*obs_inc_eakf_temp(:)
+             end if
+
+             obs_loc%lat = T_grid%y(i_o, j_o)
+             obs_loc%lon = T_grid%x(i_o, j_o) + 360.0
+             if ( obs_loc%lon > 360.0 ) obs_loc%lon = obs_loc%lon-360.0
+
+             ! snz add on Mar. 22, 2012 to differ the impact radius in coast area
+             idx_depth = sum(T_grid%mask(i_o,j_o,:))
+
+             !if (idx_depth == 0) then
+             !print*,'pe:',mpp_pe(),'i_o,j_o=',i_o,j_o,'idx_depth=',idx_depth
+             !print*,'pe:',mpp_pe(),'T_grid%mask(',i_o,j_o,':)=',T_grid%mask(i_o,j_o,:)
+             !end if
+
+             depth_factor = 1.0
+
+             if (idx_depth > 0 .and. idx_depth <= nk) then ! only when idx_depth is ok
+
+                if ((obs_loc%lat < 10.0 .and. obs_loc%lon > 290.0 .and. obs_loc%lon < 335.0) .or. &
+                     (obs_loc%lat >= 10.0 .and. obs_loc%lat <= 20.0 .and. obs_loc%lon > 270.0 .and. obs_loc%lon < 335.0) &
+                     .or. (obs_loc%lat > 20.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 335.0)) then ! the west of Atlantic
+                   prf_depth = d_g(idx_depth)
+                   if (abs(obs_loc%lat) < 20.0) then
+                      if (prf_depth > 2.*depth_coast) then
+                         depth_factor = 1.0
+                      elseif (prf_depth < 0.2*2.*depth_coast) then
+                         depth_factor = 0.2
+                      else
+                         depth_factor = prf_depth/(2.*depth_coast)
+                      end if
+                   end if
+                   if (abs(obs_loc%lat) >= 20.0 .and. abs(obs_loc%lat) <= 40.0) then
+                      if (prf_depth > 1.5*depth_coast) then
+                         depth_factor = 1.0
+                      elseif (prf_depth < 0.2*1.5*depth_coast) then
+                         depth_factor = 0.2
+                      else
+                         depth_factor = prf_depth/(1.5*depth_coast)
+                      end if
+                   end if
+                   if (abs(obs_loc%lat) > 40.0 .and. abs(obs_loc%lat) <= 60.0) then
+                      if (prf_depth > depth_coast) then
+                         depth_factor = 1.0
+                      elseif (prf_depth < 0.2*depth_coast) then
+                         depth_factor = 0.2
+                      else
+                         depth_factor = prf_depth/depth_coast
+                      end if
+                   end if
+                   if (abs(obs_loc%lat) > 60.0) then
+                      depth_factor = 1.0
+                   end if
+                end if ! the west of Atlantic
+
+             end if ! only when idx_depth is ok
+
+             if (depth_factor < 0.0 .or. depth_factor > 1.0) then
+                write (UNIT=stdout_unit, FMT='("PE ",I5,": depth_factor = ",e12.6)') mpp_pe(), depth_factor
+                stop
+             end if
+             ! end of snz add on dec. 17, 2011 to differ the impact radius in coast area
+
+             !print*,'in pe',mpp_pe(),'depth_factor=', depth_factor
+
+             do jj_ens = j - jj_do, j + jj_do ! loop over neigbourhood points
+                do ii_ens = i - ii_do, i + ii_do ! loop over neigbourhood points
+                   i_m = ii_ens
+                   j_m = jj_ens
+                   !         if ( i_m <= 0 ) i_m = i_m + ni
+                   !         if ( i_m > ni ) i_m = i_m - ni
+
+                   if ( (ii_ens >= isc-halox .and. ii_ens <= iec+halox) .and. &
+                        (jj_ens >= jsc-haloy .and. jj_ens <= jec+haloy) .and. &
+                        (j_m > 0 .and. j_m <= nj) ) then ! process in the local domain
+
+                      model_loc%lat = T_grid%y(i_m, j_m)
+                      model_loc%lon = T_grid%x(i_m, j_m) + 360.0
+                      if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+
+                      assim_flag = 1
+
+                      if ( (model_loc%lat > 18.0 .and. model_loc%lon > 260.0 .and. model_loc%lon < 280.0) .and. &
+                           & (obs_loc%lat > 18.0 .and. obs_loc%lon > 240.0 .and. obs_loc%lon < 260.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 18.0 .and. model_loc%lon > 240.0 .and. model_loc%lon < 260.0) .and. &
+                           & (obs_loc%lat > 18.0 .and. obs_loc%lon > 260.0 .and. obs_loc%lon < 280.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon > 270.0) &
+                           & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon < 270.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 14.0 .and. model_loc%lat < 22.0 .and. model_loc%lon < 270.0) &
+                           & .and. (obs_loc%lat > 14.0 .and. obs_loc%lat < 22.0 .and. obs_loc%lon > 270.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon > 275.0) &
+                           & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon < 275.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 8.0 .and. model_loc%lat < 18.0 .and. model_loc%lon < 275.0) &
+                           & .and. (obs_loc%lat > 8.0 .and. obs_loc%lat < 18.0 .and. obs_loc%lon > 275.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                           & model_loc%lon > 290.0 .and. model_loc%lon < 360.0 ) .and. &
+                           & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                           & obs_loc%lon > 110.0 .and. obs_loc%lon < 290.0) ) assim_flag = 0
+                      if ( (model_loc%lat > -54.0 .and. model_loc%lat < 10.0 .and. &
+                           & model_loc%lon > 110.0 .and. model_loc%lon < 290.0) .and. &
+                           & (obs_loc%lat > -54.0 .and. obs_loc%lat < 10.0 .and. &
+                           & obs_loc%lon > 290.0 .and. obs_loc%lon < 360.0) ) assim_flag = 0
+
+                      ! west bound
+                      if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon > 100.0) .and. &
+                           & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 0.0 .and. model_loc%lat < 25.0 .and. model_loc%lon < 100.0) .and. &
+                           & (obs_loc%lat > 0.0 .and. obs_loc%lat < 25.0 .and. obs_loc%lon > 100.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon > 77.0) .and. &
+                           & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon < 77.0) ) assim_flag = 0
+                      if ( (model_loc%lat > 10.0 .and. model_loc%lat < 30.0 .and. model_loc%lon < 77.0) .and. &
+                           & (obs_loc%lat > 10.0 .and. obs_loc%lat < 30.0 .and. obs_loc%lon > 77.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                           & model_loc%lon > 145.0 .and. model_loc%lon < 165.0) .and. &
+                           & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                           & obs_loc%lon > 125.0 .and. obs_loc%lon < 145.0) ) assim_flag = 0
+                      if ( (model_loc%lat > -40.0 .and. model_loc%lat < 0.0 .and. &
+                           & model_loc%lon > 125.0 .and. model_loc%lon < 145.0) .and. &
+                           & (obs_loc%lat > -40.0 .and. obs_loc%lat < 0.0 .and. &
+                           & obs_loc%lon > 145.0 .and. obs_loc%lon < 165.0) ) assim_flag = 0
+
+                      if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                           & model_loc%lon > 25.0 .and. model_loc%lon < 100.0) .and. &
+                           & (obs_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                           & obs_loc%lon > 0.0 .and. obs_loc%lon < 25.0) ) assim_flag = 0
+                      if ( (model_loc%lat > -35.0 .and. model_loc%lat < 20.0 .and. &
+                           & model_loc%lon > 0.0 .and. model_loc%lon < 25.0) .and. &
+                           & (obs_loc%lat > -35.0 .and. obs_loc%lat < 20.0 .and. &
+                           & obs_loc%lon > 25.0 .and. obs_loc%lon < 100.0) ) assim_flag = 0
+
+                      if ( assim_flag /= 0 ) then ! no assimilation between basins separated by land
+
+                         dist = get_dist(model_loc, obs_loc)
+                         dist = RADIUS*sqrt(dist)
+                         dist0 = dist_temp*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+ !! x1y add for testing localization changing with latitude (centered in the Equ.)
+                      if ( sstlocal_tropics_min ) then
+                       if ( obs_loc%lat <10.0 .and. obs_loc%lat > -10.0 ) then
+                            if ( abs(obs_loc%lat) <= 5.0 ) then
+                              dist0 = dist_temp*depth_factor*(cos(3.14159*(model_loc%lat-obs_loc%lat)*0.5/10.0))**2 &
+                                    & *(cos(3.14159*(model_loc%lon-obs_loc%lon)*0.5/40.0))**2 
+                            else
+                              dist0 = (1.0-(abs(obs_loc%lat)-5.0)/5.0)*depth_factor*dist_temp  &
+                                    & *(cos(3.14159*(model_loc%lat-obs_loc%lat)*0.5/10.0))**2  &
+                                    & *(cos(3.14159*(model_loc%lon-obs_loc%lon)*0.5/40.0))**2  &
+                                    & +(abs(obs_loc%lat)-5.0)/5.0*1.0*depth_factor*dist_temp   &
+                                    & *(cos(3.14159*(model_loc%lat-obs_loc%lat)*0.5/40.0))**2  &
+                                    & *(cos(3.14159*(model_loc%lon-obs_loc%lon)*0.5/40.0))**2
+                            end if
+                       end if
+                    end if
+
+
+                         cov_factor_h = comp_cov_factor(dist, dist0)*cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                    ! x1y add sst_ramping factor
+                         sst_ramping_factor = 1.0
+                      if (sst_ramping ) then
+                         if ( model_loc%lat <35.0 .and. model_loc%lat > -30.0 ) then
+                              sst_ramping_factor = 1.0
+                         else if ( model_loc%lat > sst_lat_n .or. model_loc%lat < sst_lat_s ) then
+                              sst_ramping_factor = 0.0
+                         else if ( model_loc%lat >= 35.0 .and. model_loc%lat <= sst_lat_n ) then
+                            sst_ramping_factor = (sst_lat_n-model_loc%lat)/(sst_lat_n-35.0)
+                         else if ( model_loc%lat <= -30.0 .and. model_loc%lat >= sst_lat_s ) then
+                            sst_ramping_factor = (sst_lat_s-model_loc%lat)/(sst_lat_s+30.0)
+                    !! stronger truncation in the Southern Hemisphere due to the strong bias in the SO
+                    !!                sst_ramping_factor = exp(-abs(model_loc%lat+35.0)/2)
+                         end if
+                      end if
+           !!! only for North Atlantic 260E-70E
+                     if (sst_ramping_natl ) then
+                         if ( (model_loc%lon >= 260.0 .and. model_loc%lon <= 360.0 ) .or. &
+                            & (model_loc%lon >= 0.0 .and. model_loc%lon <= 80.0 ) ) then
+                         if ( model_loc%lat < 45.0 ) then
+                              sst_ramping_factor = 1.0
+                         else if ( model_loc%lat > sst_lat_n ) then
+                              sst_ramping_factor = 0.0
+                         else if ( model_loc%lat >= 45.0 .and. model_loc%lat <= sst_lat_n ) then
+                            sst_ramping_factor = (sst_lat_n-model_loc%lat)/(sst_lat_n-45.0)
+                         end if
+                      end if
+                     end if
+
+                    if ( sst_ramping_factor < 0.0 ) then
+                      print *, 'sst_ramping_factor=', sst_ramping_factor,'model_loc%lat=',model_loc%lat
+                      print *, 'ii_ens=',ii_ens,'jj_ens=',jj_ens
+                    end if
+
+          !!! testing vertical corrlation of SST impact
+                    kk_do2 = kk_do
+                    dlat = kk_do_lat_h - kk_do_lat_l
+                    if ( kk_do_lat ) then
+                         if ( abs(model_loc%lat) >= kk_do_lat_h ) then
+                              kk_do2 = 1
+                         else if ( abs(model_loc%lat) <= kk_do_lat_l ) then
+                              kk_do2 = kk_do
+                         else if (abs(model_loc%lat) <=kk_do_lat_h .and. abs(model_loc%lat) >= kk_do_lat_l ) then
+                              kk_do2 = 1 + floor( (kk_do - 1 ) * (kk_do_lat_h - abs(model_loc%lat) )/ dlat )
+                         end if
+                    end if
+
+                    if ( kk_do2 < 1 ) then
+                        print *, 'kk_do2=', kk_do2, 'model_loc%lat=', model_loc%lat
+                     end if
+
+
+                      do k = 1, kk_do2 ! loop over top ocean
+
+                      !!      cov_factor_v = comp_cov_factor(real(k), kk_do*0.5)
+                            cov_factor_v = comp_cov_factor(real(k-1), kk_do2*0.5)
+                        !!    cov_factor = cov_factor_h*cov_factor_v
+                            cov_factor = cov_factor_h*cov_factor_v* sst_ramping_factor
+
+                            do j_ens = 1, ens_size
+                               !ens_in(j_ens) = temp_ens_tau(j_ens)%data(ii_ens,jj_ens,k)
+                               ens_in(j_ens) = T_ens_hea(1,j_ens)%data(ii_ens,jj_ens,k) !lulv 20201127
+                            end do
+                            if ( sum(ens_in(:))*sum(obs_inc_eakf_temp(:)) /= 0.0 .and. cov_factor > 0.0 ) then ! process only cov_factor > 0
+                               std_oi_g = 0.0
+                               ass_variable = 1
+                               ass_method = 1
+                               cor_oi = 0.0
+                               ens_inc(:) = 0.0
+                               call update_from_obs_inc(enso_temp_hea, obs_inc_eakf_temp,& !lulv 20201127
+                                    & obs_inc_oi_temp, ens_in(:), ens_size,&
+                                    & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                    & ass_method, ass_variable)
+
+                               do j_ens = 1, ens_size !lulv 20201127
+                                  ens_in(j_ens) = temp_ens_tau(j_ens)%data(ii_ens,jj_ens,k)
+                               end do
+                               ens_in(:) = ens_in(:) + ens_inc(:)
+
+                               do j_ens = 1,1 ! ens_size lulv 20201127
+
+                                  if ( ens_in(j_ens) > 39.0 ) then
+                                  !   print*,'in sfc_hea t-t' !lulv 20201127
+                                  !   write (UNIT=stdout_unit, FMT='("T(",4I5,") = ",F15.8)')&
+                                  !        & ii_ens, jj_ens, k, j_ens, ens_in(j_ens)
+                                     ens_in(j_ens) = 39.0
+                                  end if
+
+                                  if ( ens_in(j_ens) < -4.0 ) then
+                                  !   print*,'in sfc_hea t-t' !lulv 20201127
+                                  !   write (UNIT=stdout_unit, FMT='("T(",4I5,") = ",F25.8)')&
+                                  !        & ii_ens, jj_ens, k, j_ens, ens_in(j_ens)
+                                     ens_in(j_ens) = -4.0
+                                  end if
+
+                                  temp_ens_tau(j_ens)%data(ii_ens,jj_ens, k) = ens_in(j_ens)
+                               end do
+
+                               if (temp_to_salt) then
+                                  ass_variable = 2
+                                  ass_method = 2
+                                  do j_ens = 1, ens_size
+                                     !ens_in(j_ens) = salt_ens_tau(j_ens)%data(ii_ens,jj_ens, k)
+                                     ens_in(j_ens) = T_ens_hea(2,j_ens)%data(ii_ens,jj_ens, k) !lulv 20201127
+                                  end do
+                                  dist0 = dist_salt*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+!! x1y add for testing localization changing with latitude (centered in the Equ.)
+!!                      if ( sstlocal_tropics_min ) then
+!!                       if ( obs_loc%lat <10.0 .and. obs_loc%lat > -10.0 ) then
+!!                            if ( abs(obs_loc%lat) <= 5.0 ) then
+!!                              dist0 = dist_salt*0.25*depth_factor
+!!                            else
+!!                              dist0 = (1.0-(abs(obs_loc%lat)-5.0)/5.0)*0.25*depth_factor*dist_salt+ &
+!!                                   &  (abs(obs_loc%lat)-5.0)/5.0*1.0*depth_factor*dist_salt
+!!                            end if
+!!                       end if
+!!                    end if
+                                  cov_factor_h = comp_cov_factor(dist, dist0)*cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                            !!      cov_factor = cov_factor_h * cov_factor_v
+                                  cov_factor = cov_factor_h * cov_factor_v * sst_ramping_factor
+                                  ens_inc(:) = 0.0
+                                  call update_from_obs_inc(enso_temp_hea, obs_inc_eakf_temp,& !lulv 20201127
+                                       & obs_inc_oi_temp, ens_in(:), ens_size,&
+                                       & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                       & ass_method, ass_variable)
+
+                                  do j_ens = 1, ens_size !lulv 20201127 add
+                                     ens_in(j_ens) = salt_ens_tau(j_ens)%data(ii_ens,jj_ens, k)
+                                  end do
+                                  ens_in(:) = ens_in(:) + ens_inc(:)
+
+                                  do j_ens = 1,1 ! ens_size lulv 20201127
+
+                                     if ( ens_in(j_ens) > 44.0 ) then
+                                       ! print*,'in sfc_hea t-s' !lulv 20201127
+                                       ! write (UNIT=stdout_unit, FMT='("S(",4I5,") = ",F15.8)')&
+                                       !      & ii_ens, jj_ens, k, j_ens, ens_in(j_ens)
+                                        ens_in(j_ens) = 44.0
+                                     end if
+
+                                     if ( ens_in(j_ens) < 0.0 ) then
+                                       ! print*,'in sfc_hea t-s' !lulv 20201127
+                                       ! write (UNIT=stdout_unit, FMT='("S(",4I5,") = ",F25.8)')&
+                                       !      & ii_ens, jj_ens, k, j_ens, ens_in(j_ens)
+                                        ens_in(j_ens) = 0.0
+                                     end if
+
+                                     salt_ens_tau(j_ens)%data(ii_ens,jj_ens, k) = ens_in(j_ens)
+
+                                  end do
+
+                               end if ! temp_to_salt
+                             
+                             if(temp_to_tau_xy) then !lulv 20201117 add 
+                               ! using sst to correct tau_x
+                               ass_variable = 2
+                               ass_method = 2
+                               do j_ens = 1, ens_size
+                                  ens_in(j_ens) = uflx_ens(j_ens)%data(ii_ens,jj_ens,1)
+                               end do
+                               dist = get_dist(model_loc, obs_loc)
+                               dist = RADIUS*sqrt(dist)
+                               dist0 = dist_temp*cos(obs_loc%lat*DEG_TO_RAD)*depth_factor
+                               cov_factor = comp_cov_factor(dist, dist0)*cos((model_loc%lat-obs_loc%lat)*DEG_TO_RAD)
+                               cor_oi = 0.0
+                               ens_inc(:) = 0.0
+                               call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                    & obs_inc_oi_temp, ens_in(:), ens_size,&
+                                    & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                    & ass_method, ass_variable)
+
+                               ens_in(:) = ens_in(:) + ens_inc(:)
+
+                               do j_ens = 1, ens_size
+                                  uflx_ens(j_ens)%data(ii_ens,jj_ens,1) = ens_in(j_ens)
+                               end do
+                               ! using sst to correct tau_y
+                               do j_ens = 1, ens_size
+                                  ens_in(j_ens) = vflx_ens(j_ens)%data(ii_ens,jj_ens,1)
+                               end do
+                               ens_inc(:) = 0.0
+                               call update_from_obs_inc(enso_temp, obs_inc_eakf_temp,&
+                                    & obs_inc_oi_temp, ens_in(:), ens_size,&
+                                    & ens_inc, cov_factor, cor_oi, std_oi_o, std_oi_g,&
+                                    & ass_method, ass_variable)
+
+                               ens_in(:) = ens_in(:) + ens_inc(:)
+
+                               do j_ens = 1, ens_size
+                                  vflx_ens(j_ens)%data(ii_ens,jj_ens,1) = ens_in(j_ens)
+                               end do
+                             endif !temp_to_tau_xy lulv 20201127
+                            end if ! process only cov_factor > 0
+
+                         end do ! loop over top ocean 
+
+                      end if ! no assimilation between basins separated by land
+
+                   end if ! process the local domain
+
+                end do ! loop over neigbourhood points
+             end do ! loop over neigbourhood points
+
+          end if ! limit j_o
+
+       end do ! loop over sfc data points
+    end do ! loop over sfc data points
+
+    return
+
+  end subroutine ensemble_filter_sfc_hea
+end module eakf_oda_mod !lulv
