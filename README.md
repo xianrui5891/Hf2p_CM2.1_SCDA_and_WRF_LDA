@@ -1,8 +1,8 @@
 # Hf2p_CM2.1_SCDA & WRF_LDA
 
-This repository contains the core code and minimal supporting materials used in the paper *Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation*. It includes the trimmed and modified files necessary to understand and reproduce parts of the work. **Note:** the observation datasets, pretrained model weights, and the full source trees of CM2.1 and WRF v3.7.1 are **not** included — only the code files we changed are provided here.
+This repository contains the core code and minimal supporting materials used in the paper *Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation*. It includes the complete program for `CM2.1_SCDA` and trimmed/modified files for `WRF_LDA` necessary to understand and reproduce parts of the work. **Note:** the full source tree of WRF v3.7.1 and pretrained model weights are **not** included.
 
-To reproduce the experiments you will need to prepare the observation data, train the models locally, and adapt the Python dataflow to your environment. If you require the processed observation data or the pretrained model weights used in the study, they are available from the authors upon reasonable request.
+To reproduce the experiments, the required observation data for both programs are distributed via Zenodo (DOI): https://doi.org/10.5281/zenodo.18799861. The repository keeps the core code and minimal support files; large observation datasets are provided in the Zenodo record. You will still need to train the models locally and adapt the Python dataflow to your environment. We do not provide pretrained model weights; if needed, please contact the authors or train them yourself.
 
 ---
 
@@ -21,7 +21,7 @@ This repository provides minimal implementation files and driver scripts referen
 * `CM2.1_SCDA`
 * `WRF_LDA`
 
-Each folder contains the pared-down / modified code and example drivers required to run the manuscript’s demo cases.
+`CM2.1_SCDA` contains the complete program and example drivers required to run the manuscript’s demo cases, while `WRF_LDA` keeps the pared-down / modified code and example drivers.
 
 Additionally, each of the above folders contains two environment reference files (one Conda and one pip) that can be used to configure a Python environment:
 
@@ -36,10 +36,10 @@ Additionally, each of the above folders contains two environment reference files
 
 ## Important files & layout
 
-* `WRFv3.7.1/cm2.1-modified-src` trimmed/modified CM2.1/WRF code.
+* `CM2.1-SCDA/cm2.1-modified-src` complete CM2.1_SCDA program source used in this repository.
 * `PMC_w_LDA(SCDA)/` — Python modules and scripts (see notes below).
 * `plug/` F2py-related Fortran wrappers used to build `.so` modules (for example `plug.F90` and the corresponding generated shared objects).
-* `data/` — partial data used to illustrate/assist the Python implementations (not the full observation sets).
+* Observation data (preprocessed and required for experiments) are available at Zenodo: https://doi.org/10.5281/zenodo.18799861.
 
 ## Notes on Python code and data
 
@@ -48,7 +48,7 @@ Additionally, each of the above folders contains two environment reference files
   * Fortran–Python interaction code and the Python main controller.
   * Implementation of the VAE-LDA algorithm used in the manuscript.
   * Other ML model code used in experiments.
-* The `data/` folder contains limited example files to help understand the Python-side implementation and dataflow. **These are not the full observation datasets** — full observations must be prepared separately.
+* The required observation datasets are hosted on Zenodo (preprocessed): https://doi.org/10.5281/zenodo.18799861.
 * When you run the Python code you will likely need to adapt the file paths and the data flow to match your local filesystem and data preparation pipeline.
 
 ## Build / compilation notes
