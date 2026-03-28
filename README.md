@@ -1,6 +1,6 @@
 # Hf2p_CM2.1_SCDA & WRF_LDA
 
-This repository contains the core code and minimal supporting materials used in the paper *Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation*. It includes the complete program for `CM2.1_SCDA` and trimmed/modified files for `WRF_LDA` necessary to understand and reproduce parts of the work. **Note:** the full source tree of WRF v3.7.1 and pretrained model weights are **not** included.
+This repository contains the core code and minimal supporting materials used in the paper *Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation(Hf2pMDA_1.0)*. It includes the complete program for `CM2.1_SCDA` and trimmed/modified files for `WRF_LDA` necessary to understand and reproduce parts of the work. **Note:** the full source tree of WRF v3.7.1 and pretrained model weights are **not** included.
 
 To reproduce the experiments, the required observation data for both programs are distributed via Zenodo (DOI): https://doi.org/10.5281/zenodo.18799861. The repository keeps the core code and minimal support files; large observation datasets are provided in the Zenodo record. You will still need to train the models locally and adapt the Python dataflow to your environment. We do not provide pretrained model weights; if needed, please contact the authors or train them yourself.
 
@@ -8,7 +8,7 @@ To reproduce the experiments, the required observation data for both programs ar
 
 ## Associated paper and authors
 
-**Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation**
+**Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation(Hf2pMDA_1.0)**
 
 by Xianrui Zhu, Zikuan Lin, Shaoqing Zhang, Zebin Lu, Songhua Wu, Xiangyun Hou, Zhisheng Xiao, Zhicheng Ren, Jiangyu Li, Jing Xu, Yang Gao, Rixu Hao, Xiaolin Yu, Mingkui Li
 
@@ -73,3 +73,17 @@ If you have questions or encounter issues, please contact:
 
 * Shaoqing Zhang — [szhang@ouc.edu.cn](mailto:szhang@ouc.edu.cn)
 * Xianrui Zhu — [zhuxianrui@stu.ouc.edu.cn](mailto:zhuxianrui@stu.ouc.edu.cn) / [mapzhu@foxmail.com](mailto:mapzhu@foxmail.com)
+
+## How to cite this work
+```bibtex
+@Article{egusphere-2025-6479,
+AUTHOR = {Zhu, X. and Lin, Z. and Zhang, S. and Lu, Z. and Wu, S. and Hou, X. and Xiao, Z. and Ren, Z. and Li, J. and Xu, J. and Gao, Y. and Hao, R. and Yu, X. and Li, M.},
+TITLE = {Python-Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation (Hf2pMDA\_1.0)},
+JOURNAL = {EGUsphere},
+VOLUME = {2026},
+YEAR = {2026},
+PAGES = {1--32},
+URL = {https://egusphere.copernicus.org/preprints/2026/egusphere-2025-6479/},
+DOI = {10.5194/egusphere-2025-6479}
+}
+```
