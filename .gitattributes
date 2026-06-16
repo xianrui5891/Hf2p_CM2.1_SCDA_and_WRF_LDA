@@ -1,0 +1,15 @@
+* text=auto eol=lf
+
+*.gif binary
+*.gz binary
+*.jpg binary
+*.jpeg binary
+*.nc binary
+*.npz binary
+*.pdf binary
+*.png binary
+*.pth binary
+*.pyc binary
+*.so binary
+*.tar binary
+*.zip binary
