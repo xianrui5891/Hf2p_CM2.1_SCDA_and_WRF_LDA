@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 import xarray as xr
 from torch.serialization import add_safe_globals
 import json
+from pathlib import Path
 from typing import Union, Dict, Any, Tuple, Optional
 add_safe_globals([torch.utils.data.dataset.ConcatDataset])
 from utils.normalization_utils import *
@@ -12,12 +13,17 @@ from utils.obsdata_utils import *
 from utils.interpolate_utils import interpolate as myinterpolate
 from utils.debug_utils import DebugPlotter
 
+CURRENT_DIR = Path(__file__).resolve().parent
+DEFAULT_NMC_BACKGROUND_COVARIANCE_PATH = None
+
 class latent_space_da:
     def __init__(self, dev = "cuda",
                  learning_rate = 1e-3,
                  max_iterations = 300,
                  obs_path = "./obs/",
                  vae_model_path = "best_model.pth",
+                 nmc_background_covariance_path: Optional[Union[str, Path]] = DEFAULT_NMC_BACKGROUND_COVARIANCE_PATH,
+                 b_diag_floor: float = 1e-6,
                  name_mapping=None):
         
         self.dev = torch.device(dev)
@@ -27,6 +33,10 @@ class latent_space_da:
         self.var_name = var_name
         self.norm_dict = norm_dict
         self.name_mapping = name_mapping or {'U10':0,'V10':1}
+        self.nmc_background_covariance_path = nmc_background_covariance_path
+        self.b_diag_floor = b_diag_floor
+        self.B_diag: Optional[torch.Tensor] = None
+        self.B_diag_source: Optional[Path] = None
         self.debug_plotter = DebugPlotter(filename_prefix='training_plot')
 
         self.ckpt = torch.load(vae_model_path, weights_only=False)
@@ -62,6 +72,63 @@ class latent_space_da:
         self.vae.eval()
         print("Model loaded.")
 
+    def _resolve_nmc_path(self) -> Optional[Path]:
+        if self.nmc_background_covariance_path is None:
+            return None
+
+        path = Path(self.nmc_background_covariance_path).expanduser()
+        if not path.is_absolute():
+            path = CURRENT_DIR / path
+        return path.resolve()
+
+    def _load_background_covariance_diag(self, expected_dim: int) -> torch.Tensor:
+        expected_dim = int(expected_dim)
+        fallback = torch.full((expected_dim,), 1.0, dtype=torch.float32, device=self.dev)
+        path = self._resolve_nmc_path()
+        if path is None:
+            print("[WARN] NMC B_diag path is not set. Using unit B_diag.")
+            return fallback
+        if not path.exists():
+            print(f"[WARN] NMC covariance file not found: {path}. Using unit B_diag.")
+            return fallback
+
+        with np.load(path, allow_pickle=True) as nmc_stats:
+            diag_key = None
+            for key in ("B_diag", "background_covariance_diag", "variance", "background_var_map"):
+                if key in nmc_stats:
+                    diag_key = key
+                    break
+            if diag_key is None:
+                raise KeyError(
+                    f"{path} must contain one of: B_diag, background_covariance_diag, variance, background_var_map."
+                )
+            b_diag_np = np.asarray(nmc_stats[diag_key], dtype=np.float32).reshape(-1)
+
+        if b_diag_np.size != expected_dim:
+            raise ValueError(
+                f"NMC B_diag length mismatch: got {b_diag_np.size}, expected {expected_dim}. "
+                f"Please regenerate NMC statistics with the same WRF VAE checkpoint."
+            )
+
+        floor = max(float(self.b_diag_floor), 1e-12)
+        b_diag_np = np.nan_to_num(
+            b_diag_np,
+            nan=floor,
+            posinf=np.finfo(np.float32).max,
+            neginf=floor,
+        )
+        b_diag_np = np.clip(b_diag_np, floor, None)
+
+        self.B_diag_source = path
+        print(f"[INFO] Loaded NMC B_diag from {path} (key={diag_key}, dim={b_diag_np.size}).")
+        return torch.as_tensor(b_diag_np, dtype=torch.float32, device=self.dev)
+
+    def _get_background_covariance_diag(self, expected_dim: int) -> torch.Tensor:
+        expected_dim = int(expected_dim)
+        if self.B_diag is None or self.B_diag.numel() != expected_dim:
+            self.B_diag = self._load_background_covariance_diag(expected_dim)
+        return self.B_diag
+
     def encode(self, input: torch.tensor):
         input = torch.nn.functional.interpolate(input, size=(256, 256), mode='bilinear', align_corners=False)
         return self.vae.encode(input)
@@ -90,8 +157,8 @@ class latent_space_da:
             if len(vals)>0:
                 temp_Hx.extend(vals)
         Hx = torch.stack(temp_Hx).to(self.dev)  # 1D tensor, requires_grad True if latent_x requires_grad
-        print(f"Hx= {Hx.detach().cpu()}")
-        print("DEBUG Hx.requires_grad:", Hx.requires_grad)
+        #print(f"Hx= {Hx.detach().cpu()}")
+        #print("DEBUG Hx.requires_grad:", Hx.requires_grad)
         return Hx.squeeze()
 
     @torch.enable_grad()
@@ -116,7 +183,7 @@ class latent_space_da:
         B_diag = B_diag.to(x.device)
         R_diag = R_diag.to(x.device)
 
-        print(f"obs: {y.detach().cpu()}")
+        #print(f"obs: {y.detach().cpu()}")
 
         for it in range(max_iterations):
             optimizer.zero_grad(set_to_none=True)
@@ -143,10 +210,10 @@ class latent_space_da:
             best_x = x.detach().clone()
             
             # 可选：打印调试信息
-            if it % 10 == 0:
-                print(f"iter {it+1}/{max_iterations}, loss={loss_J.item():.6e}, loss_background={loss_background.item():.6e}, loss_observation = {loss_observation.item():.6e}")
+            #if it % 10 == 0:
+                #print(f"iter {it+1}/{max_iterations}, loss={loss_J.item():.6e}, loss_background={loss_background.item():.6e}, loss_observation = {loss_observation.item():.6e}")
             
-            self.debug_plotter.plot(it+1, loss_J.item(), loss_background.item(), loss_observation.item())
+            # self.debug_plotter.plot(it+1, loss_J.item(), loss_background.item(), loss_observation.item())
         
         return best_x
     
@@ -207,8 +274,8 @@ class latent_space_da:
         # 编码获得背景态 xb（潜空间）
         latent_x = self.encode(input_t)
 
-        # 解析前空间大小并获得B_diag
-        B_diag = torch.full((latent_x[0].numel(),), 1, device=self.dev)
+        # 解析潜空间大小并获得完整 NMC B_diag
+        B_diag = self._get_background_covariance_diag(latent_x[0].numel())
         
         # 构造观测值和观测值的坐标
         temp_value = {}
@@ -232,10 +299,10 @@ class latent_space_da:
         R_diag = torch.full((obs_values.shape[0],), 1e-3, device=self.dev)
 
         # 调用 apply_3DVar
-        assim_latent_x = self.apply_3DVar(self.H, B_diag, R_diag, latent_x, obs_values, obs_coords, axis,
+        assim_latent_x = self.apply_3DVar(self.H, B_diag, SR_diag, latent_x, obs_values, obs_coords, axis,
                                     self.max_iterations, self.learning_rate)
 
-        self.debug_plotter.close()
+        # self.debug_plotter.close()
 
         # 解码同化后潜变量S
         decoded = self.decode(assim_latent_x, axis)

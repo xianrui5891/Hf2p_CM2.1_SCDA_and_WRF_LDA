@@ -8,7 +8,7 @@ Modifications requested by user:
 - NetCDF: ignore time (no time axis) and do not create per-variable files/folders. Instead create three files
   in the base directory: original.nc, da.nc, increment.nc. Each file contains lon, lat and variables saved by var_name
   (shape: lon x lat). Repeated saves overwrite the variable inside that category file.
-- Plotting: use colormap 'viridis'. Make lon the horizontal axis (x) and lat the vertical axis (y).
+- Plotting: use colormap 'bwr'. Make lon the horizontal axis (x) and lat the vertical axis (y).
   Overlayed 'x' markers: black 'x' without annotations.
 
 Assumptions (kept minimal):
@@ -130,7 +130,7 @@ class NCWriter:
 
 
 class FieldPlotter:
-    """Plot 2D fields with lon as x-axis and lat as y-axis, using colormap 'viridis'.
+    """Plot 2D fields with lon as x-axis and lat as y-axis, using colormap 'bwr'.
 
     Files are saved to: base_dir/<data_type>/<var_name>/<time>_<data_type>_<var_name>.png
     """
@@ -217,7 +217,7 @@ class FieldPlotter:
 
         fig, ax = plt.subplots(figsize=(7, 5))
         im = ax.imshow(data_to_plot, extent=extent, origin='lower', aspect='auto',
-                    vmin=vmin, vmax=vmax, cmap='viridis')
+                    vmin=vmin, vmax=vmax, cmap='bwr')
         ax.set_xlabel('lon')
         ax.set_ylabel('lat')
         ax.set_title(f"{time_str} {data_type} {var_name}")

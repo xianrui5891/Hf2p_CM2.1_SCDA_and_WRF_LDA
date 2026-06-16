@@ -1,80 +1,219 @@
-# Hf2p_CM2.1_SCDA & WRF_LDA
+# Hf2p CM2.1-SCDA and WRF-LDA
 
-This repository contains the core code and minimal supporting materials used in the paper *Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation(Hf2pMDA_1.0)*. It includes the complete program for `CM2.1_SCDA` and trimmed/modified files for `WRF_LDA` necessary to understand and reproduce parts of the work. **Note:** the full source tree of WRF v3.7.1 and pretrained model weights are **not** included.
+This repository contains the hybrid Python-Fortran code used for CM2.1-SCDA and WRF-LDA experiments in the Hf2pMDA work. The CM2.1 Python DA component has been replaced with the CM2-LDA autoencoder workflow from `D:\Desktop\models\VAE\CM2-lda`, including preprocessing, training, analysis, NMC background estimation, runtime DA adapter, and configs.
 
-To reproduce the experiments, the required observation data for both programs are distributed via Zenodo (DOI): https://doi.org/10.5281/zenodo.18799861. The repository keeps the core code and minimal support files; large observation datasets are provided in the Zenodo record. You will still need to train the models locally and adapt the Python dataflow to your environment. We do not provide pretrained model weights; if needed, please contact the authors or train them yourself.
+Observation data, processed training frames, normalization metadata, trained model checkpoints, and NMC `B_z`/`.npz` files are prepared by the provided scripts and are not stored in this repository. The public data record is available at Zenodo: https://doi.org/10.5281/zenodo.18799861.
 
----
+## Paper
 
-## Associated paper and authors
+**Python-Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation (Hf2pMDA_1.0)**
 
-**Python–Fortran Hybrid Programming for Deep Incorporation of AI and Physics Modeling and Data Assimilation(Hf2pMDA_1.0)**
+Authors: Xianrui Zhu, Zikuan Lin, Shaoqing Zhang, Zebin Lu, Songhua Wu, Xiangyun Hou, Zhisheng Xiao, Zhicheng Ren, Jiangyu Li, Jing Xu, Yang Gao, Rixu Hao, Xiaolin Yu, Mingkui Li.
 
-by Xianrui Zhu, Zikuan Lin, Shaoqing Zhang, Zebin Lu, Songhua Wu, Xiangyun Hou, Zhisheng Xiao, Zhicheng Ren, Jiangyu Li, Jing Xu, Yang Gao, Rixu Hao, Xiaolin Yu, Mingkui Li
+## Repository Layout
 
----
+- `CM2.1-SCDA/`: CM2.1-SCDA source modifications, F2PY plug files, Python CM2-LDA workflow, and CM2 environment references.
+- `CM2.1-SCDA/cm2.1-modified-src/`: modified CM2.1 Fortran source tree used before building CM2.1-SCDA.
+- `CM2.1-SCDA/plug/`: F2PY interface files for the CM2.1 Python-Fortran bridge.
+- `CM2.1-SCDA/PMC_w_SCDA/`: current CM2-LDA Python workflow and runtime DA adapter.
+- `WRF_LDA/`: WRF v3.7.1 source modifications, F2PY plug files, Python LDA workflow, and WRF environment references.
+- `WRF_LDA/WRFv3.7.1-modified-src/`: modified WRF source files.
+- `WRF_LDA/PMC_w_LDA/`: WRF-LDA Python workflow.
 
-## Contents
+Environment references:
 
-This repository provides minimal implementation files and driver scripts referenced in the paper for:
+- `CM2.1-SCDA/environment_cm2_scda.yaml`
+- `CM2.1-SCDA/requirements.txt`
+- `WRF_LDA/environment_wrflda.yaml`
+- `WRF_LDA/requirements.txt`
 
-* `CM2.1_SCDA`
-* `WRF_LDA`
+## CM2-LDA Python Workflow
 
-`CM2.1_SCDA` contains the complete program and example drivers required to run the manuscript’s demo cases, while `WRF_LDA` keeps the pared-down / modified code and example drivers.
+The current CM2.1 Python workflow lives in `CM2.1-SCDA/PMC_w_SCDA`. It contains:
 
-Additionally, each of the above folders contains two environment reference files (one Conda and one pip) that can be used to configure a Python environment:
+- `cm2_cda_main.py`: main CM2.1-SCDA runtime controller called from the coupled Python-Fortran workflow.
+- `vae_cda.py`: DA adapter exposing `latent_space_da.do_da(...)`.
+- `configs/`: path, preprocessing, training, analysis, and NMC configuration files.
+- `data_preprocess/`: CM2 NetCDF preprocessing, observation preprocessing, NMC background, and climatological background scripts.
+- `training/`: autoencoder training entrypoint, trainer, losses, optimizer, and checkpoint utilities.
+- `model/`: coupled atmosphere-ocean autoencoder model.
+- `analysis/`: reconstruction analysis, metrics, and plotting utilities.
+- `utils/`: path, data, logging, normalization, EMA, and plotting helpers.
+Generated logs, analysis result folders, plot folders, model checkpoints, normalization metadata, NMC output files, and `__pycache__` files are intentionally not kept here.
 
-* **For `cm2.1_scda`**
+## CM2-LDA Paths
 
-  * `environment_cm2_scda.yaml` (Conda)
-  * `requirements.txt` (pip)
-* **For `WRF_lda`**
+Most CM2-LDA scripts read paths from JSON/YAML files under `CM2.1-SCDA/PMC_w_SCDA/configs`. These configs still contain absolute paths from the original Linux training/runtime environment, such as `/data/cm2_lda` and `/data/ouc/...`.
 
-  * `environment_wrflda.yaml` (Conda)
-  * `requirements.txt` (pip)
+Before running on a new machine, update the path fields in these files:
 
-## Important files & layout
+- `configs/paths.json`
+- `configs/preprocess_nc.json`
+- `configs/preprocess_observation.json`
+- `configs/train_ae_compression_8x.yaml`
+- `configs/nmc_background.json`
+- `configs/analysis.json`
 
-* `CM2.1-SCDA/cm2.1-modified-src` complete CM2.1_SCDA program source used in this repository.
-* `PMC_w_LDA(SCDA)/` — Python modules and scripts (see notes below).
-* `plug/` F2py-related Fortran wrappers used to build `.so` modules (for example `plug.F90` and the corresponding generated shared objects).
-* Observation data (preprocessed and required for experiments) are available at Zenodo: https://doi.org/10.5281/zenodo.18799861.
+For runtime DA, `configs/paths.json` controls the observation `.pt`, AE checkpoint, normalization metadata, normalization statistics, and NMC covariance `.npz` paths used by `vae_cda.py`.
 
-## Notes on Python code and data
+Key path fields to check:
 
-* The Python implementations used in the experiments are located in the `PMC_w_LDA(SCDA)/` folder. This includes:
+- `configs/paths.json`: `storage_root`, `raw_dir`, `data_dir`, `runs_dir`, `analysis_dir`, `nmc_output_dir`, `processed_data_path`, `metadata_path`, `normalization_stats_path`, `observation_path`, `ae_model_path`, `nmc_background_covariance_path`.
+- `configs/preprocess_nc.json`: `atm_glob`, `ocn_glob`, `output_dir`, `progress_log_dir`.
+- `configs/preprocess_observation.json`: `atm_glob`, `ocn_glob`, `output_dir`.
+- `configs/train_ae_compression_8x.yaml`: `data.path`, `data.metadata_path`, `checkpoint.save_dir`, `checkpoint.resume_from`, `logging.output_dir`, `logging.log_dir`, `output_dir`.
+- `configs/nmc_background.json`: `data_path`, `metadata_path`, `checkpoint`, `output_dir`.
+- `configs/analysis.json`: `data_path`, `metadata_path`, `checkpoint`, `output_dir`.
 
-  * Fortran–Python interaction code and the Python main controller.
-  * Implementation of the VAE-LDA algorithm used in the manuscript.
-  * Other ML model code used in experiments.
-* The required observation datasets are hosted on Zenodo (preprocessed): https://doi.org/10.5281/zenodo.18799861.
-* When you run the Python code you will likely need to adapt the file paths and the data flow to match your local filesystem and data preparation pipeline.
+## CM2-LDA Data Preprocessing
 
-## Build / compilation notes
+Run commands from `CM2.1-SCDA/PMC_w_SCDA`:
 
-### For `CM2.1_SCDA`
+```bash
+cd CM2.1-SCDA/PMC_w_SCDA
+```
 
-* **Important:** copy the files from `cm2.1-modified-src` (in this repository) into the corresponding locations in your WRF source trees, **overwriting** the original source files, and then compile. The modified files must replace the source files prior to building.
-* Build and compile using the **Intel** compiler toolchain.
-* Install and compile NetCDF (and the NetCDF–Python interface), OpenMPI, and other compiled dependencies with the Intel compilers to ensure binary compatibility with the provided Fortran code and libraries.
-* Avoid relying exclusively on Conda-provided binaries for compiled components — the Intel toolchain is required.
-* The compilation/compile-flow is described in Section 2 of the paper — follow that flow for best reproducibility.
+Preprocess CM2 NetCDF output into normalized frame files:
 
-### For `WRF_LDA`
+```bash
+python -m data_preprocess.preprocess_nc --config configs/preprocess_nc.json
+```
 
-* When running WRF’s `./configure` script, **select option `34 1`**. We cannot guarantee correct behavior if a different configuration option is chosen.
-* **Important:** copy the files from `WRFv3.7.1-modified-src` (in this repository) into the corresponding locations in your WRF source trees, **overwriting** the original source files, and then compile. The modified files must replace the source files prior to building.
-* The compilation/compile-flow is described in Section 2 of the paper — follow that flow for best reproducibility.
+For MPI preprocessing:
+
+```bash
+mkdir -p logs
+mpirun -np 8 python -u -m data_preprocess.preprocess_nc \
+  --config configs/preprocess_nc.json \
+  --parallel-backend mpi
+```
+
+For local multiprocessing:
+
+```bash
+python -m data_preprocess.preprocess_nc \
+  --config configs/preprocess_nc.json \
+  --parallel-backend process \
+  --preprocess-workers 8
+```
+
+Preprocess observations for the DA adapter:
+
+```bash
+python -m data_preprocess.preprocess_observation \
+  --config configs/preprocess_observation.json
+```
+
+This produces the merged observation file expected by `vae_cda.py`.
+
+## CM2-LDA Training
+
+Train the CM2-LDA model with the 8x compression config. This is the target CM2-LDA model version for this workflow:
+
+```bash
+python -m training.train_ae \
+  --config configs/train_ae_compression_8x.yaml
+```
+
+Multi-GPU launch through DeepSpeed using PyTorch DDP internally:
+
+```bash
+deepspeed --num_gpus=4 --module training.train_ae \
+  --config configs/train_ae_compression_8x.yaml
+```
+
+Resume from a checkpoint:
+
+```bash
+python -m training.train_ae \
+  --config configs/train_ae_compression_8x.yaml \
+  --resume-from /path/to/last_model.pth
+```
+
+Other training configs are kept only for comparison or development:
+
+- `configs/train_ae_compression_3x.yaml`
+- `configs/train_ae_compression_3x_cnnsubband.yaml`
+- `configs/train_ae.yaml`
+
+## CM2-LDA NMC Background
+
+Estimate latent-space NMC background statistics after training:
+
+```bash
+python -m data_preprocess.nmc_background \
+  --config configs/nmc_background.json
+```
+
+The script writes `latent_nmc_background_covariance.npz` and diagnostic figures to the configured output directory.
+
+Climatological background variants are also provided:
+
+```bash
+python -m data_preprocess.climatological_background \
+  --config configs/climatological_background_paper.json
+
+python -m data_preprocess.state_climatological_background \
+  --config configs/state_climatological_background_paper.json
+```
+
+## CM2-LDA Analysis
+
+Run reconstruction and spectral analysis:
+
+```bash
+python -m analysis.analyze_ae --config configs/analysis.json
+```
+
+Metric-only reconstruction evaluation:
+
+```bash
+python -m analysis.evaluate_reconstruction
+```
+
+Additional plotting helpers are available:
+
+- `plot_cm2_training_output_fields.py`
+- `plot_obs_model_error.py`
+
+## CM2-LDA Runtime
+
+The coupled CM2.1 Python runtime entry is:
+
+```bash
+python cm2_cda_main.py
+```
+
+`cm2_cda_main.py` imports the F2PY-generated `cm2` module and calls `cm2_cda_plugs`, so the CM2.1 Fortran side and F2PY bridge must be built and importable before this command can run. Rank 0 constructs `latent_space_da` from `vae_cda.py`; the adapter loads observation data, normalization metadata, the AE model checkpoint, and the NMC covariance path configured in `configs/paths.json`.
+
+## CM2.1 Build Notes
+
+- Copy or merge files from `CM2.1-SCDA/cm2.1-modified-src` into the corresponding CM2.1 source locations before compiling.
+- Build the Fortran model and F2PY plug files with a consistent compiler/MPI/NetCDF stack.
+- The original workflow used Intel compilers and Intel-compatible NetCDF/OpenMPI builds.
+- Avoid mixing incompatible Conda binary libraries with the Fortran/MPI stack.
+
+## WRF-LDA Notes
+
+- WRF modified source files are under `WRF_LDA/WRFv3.7.1-modified-src`.
+- Python workflow files are under `WRF_LDA/PMC_w_LDA`.
+- F2PY bridge files are under `WRF_LDA/plug`.
+- When configuring WRF v3.7.1, use option `34 1` for the workflow documented in this project.
+- Copy or merge files from `WRFv3.7.1-modified-src` into the corresponding WRF source locations before building.
+
+## Data
+
+Large raw and preprocessed observation/model datasets are not tracked here. Use the Zenodo record and then update the config paths for your local filesystem:
+
+https://doi.org/10.5281/zenodo.18799861
 
 ## Contact
 
-If you have questions or encounter issues, please contact:
+- Shaoqing Zhang: [szhang@ouc.edu.cn](mailto:szhang@ouc.edu.cn)
+- Xianrui Zhu: [zhuxianrui@stu.ouc.edu.cn](mailto:zhuxianrui@stu.ouc.edu.cn), [mapzhu@foxmail.com](mailto:mapzhu@foxmail.com)
 
-* Shaoqing Zhang — [szhang@ouc.edu.cn](mailto:szhang@ouc.edu.cn)
-* Xianrui Zhu — [zhuxianrui@stu.ouc.edu.cn](mailto:zhuxianrui@stu.ouc.edu.cn) / [mapzhu@foxmail.com](mailto:mapzhu@foxmail.com)
+## Citation
 
-## How to cite this work
 ```bibtex
 @Article{egusphere-2025-6479,
 AUTHOR = {Zhu, X. and Lin, Z. and Zhang, S. and Lu, Z. and Wu, S. and Hou, X. and Xiao, Z. and Ren, Z. and Li, J. and Xu, J. and Gao, Y. and Hao, R. and Yu, X. and Li, M.},

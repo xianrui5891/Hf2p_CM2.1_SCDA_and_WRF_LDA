@@ -1,0 +1,25 @@
+{
+  "data_path": "/data/cm2_lda/data",
+  "metadata_path": "/data/cm2_lda/data/normalization_metadata.json",
+  "checkpoint": "/data/cm2_lda/checkpoints/run_ae_8x/last_model.pth",
+  "output_dir": "./analysis_result/manual_check_best_8x",
+  "split": "val",
+  "val_fraction": 0.1,
+  "sample_start": 0,
+  "sample_stop": null,
+  "sample_indices": null,
+  "num_samples": 2000,
+  "max_variables": null,
+  "plot_space": "normalized",
+  "metric_space": "normalized",
+  "no_plot": true,
+  "no_spectral": true,
+  "batch_size": 16,
+  "num_workers": 0,
+  "no_progress": false,
+  "cmap": "bwr",
+  "spectrum_colors": [
+    "#1f77b4",
+    "#d62728"
+  ]
+}

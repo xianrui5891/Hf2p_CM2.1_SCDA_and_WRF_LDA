@@ -1,0 +1,198 @@
+data:
+  path: /data/cm2_lda/data
+  metadata_path: /data/cm2_lda/data/normalization_metadata.json
+  val_fraction: 0.1
+  num_workers: 8
+  prefetch_factor: 32
+  persistent_workers: true
+  pin_memory: true
+  timeout: 180
+  drop_last: true
+  seed: 42
+  shuffle_split: false
+  shuffle_train: true
+  shuffle_strategy: block
+  block_shuffle_size: 4096
+  block_shuffle_within: false
+  mmap_frames: false
+  in_order: false
+  worker_torch_threads: 1
+  max_samples: null
+
+model:
+  latent_channels: 36
+  width: 56
+  decoder_width: 160
+  decoder_middle_depth: 6
+  decoder_stage_depth: [8, 6, 4, 2, 2, 2]
+  atm_decoder_stage_depth: [8, 6, 6, 4]
+  ocn_decoder_stage_depth: [8, 6, 4, 3, 3, 3]
+  fusion_mode: cross_attention
+  cross_depth: 5
+  heads: 4
+
+runtime:
+  allow_tf32: true
+  cudnn_benchmark: true
+  float32_matmul_precision: high
+  channels_last: true
+  torch_compile: false
+  torch_compile_mode: reduce-overhead
+  log_backend_status: true
+
+backends:
+  attention: auto        # auto | flash_attn | xformers | sdpa
+  conv: super_conv       # super_conv/channels_last enables dense Conv2d channels-last optimization
+  sparse: spconv         # config hint kept for PALM-GDA parity; CM2-LDA currently uses dense 2-D grids
+
+loss:
+  reconstruction:
+    enabled: true
+    start_epoch: 0
+    ramp_epochs: 0
+    end_epoch: null
+    cooldown_epochs: 0
+    end_factor: 0.0
+    l1_start_epoch: 0
+    l1_ramp_epochs: 0
+    l1_end_epoch: 8
+    l1_cooldown_epochs: 8
+    l1_end_factor: 1.0
+    l1_weight: 1.2
+    l2_start_epoch: 0
+    l2_ramp_epochs: 0
+    l2_end_epoch: 8
+    l2_cooldown_epochs: 8
+    l2_end_factor: 0.45
+    l2_weight: 0.35
+  gradient:
+    enabled: true
+    start_epoch: 0
+    ramp_epochs: 0
+    end_epoch: null
+    cooldown_epochs: 0
+    end_factor: 0.0
+    weight: 0.10
+  energy:
+    enabled: true
+    start_epoch: 0
+    ramp_epochs: 0
+    end_epoch: null
+    cooldown_epochs: 0
+    end_factor: 0.0
+    weight: 0.05
+  spectral:
+    enabled: true
+    start_epoch: 4
+    ramp_epochs: 4
+    end_epoch: null
+    cooldown_epochs: 0
+    end_factor: 0.0
+    weight: 0.008
+    atm_weight: 1.0
+    ocn_weight: 1.3
+  radial_spectral:
+    enabled: false
+    start_epoch: 4
+    ramp_epochs: 4
+    end_epoch: null
+    cooldown_epochs: 0
+    end_factor: 0.0
+    weight: 0.02
+  subband:
+    enabled: true
+    mode: spatial
+    start_epoch: 4
+    ramp_epochs: 4
+    end_epoch: null
+    cooldown_epochs: 0
+    end_factor: 0.0
+    weight: 0.45
+    atm_weight: 1.0
+    ocn_weight: 1.15
+    norm: charbonnier
+    relative: true
+    edges: [0.0, 0.25, 0.50, 0.72, 1.01]
+    weights: [0.55, 0.85, 1.50, 2.55]
+    transition_ratio: 0.12
+    eps: 5.0e-3
+    weight_power: 0.35
+    weight_cap: 1.0
+  latent_corruption:
+    enabled: true
+    mode: single_pass_denoising
+    start_epoch: 3
+    ramp_epochs: 6
+    end_epoch: null
+    cooldown_epochs: 0
+    end_factor: 0.0
+    sigma: 0.012
+    weight: 0.12
+
+training:
+  epochs: 135
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  latent_corruption_sigma: 0.012
+  amp_enabled: true
+  amp_dtype: float16
+  gradient_clip_norm: 1.0
+  optimizer:
+    name: adamw
+    lr: 7.5e-5
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    fused: true
+  scheduler:
+    name: cosine
+    warmup_epochs: 5
+    warmup_start_factor: 0.10
+    min_lr: 1.0e-6
+    step_size: 25
+    gamma: 0.5
+    patience: 15
+    factor: 0.5
+  ema:
+    enabled: true
+    decay: 0.9999
+    warmup_steps: 1000
+  early_stopping:
+    enabled: false
+    patience: 45
+    min_delta: 1.0e-6
+
+distributed:
+  backend: ddp
+  deepspeed:
+    zero_stage: 2
+    offload_optimizer: false
+    offload_param: false
+    fp16_enabled: true
+    bf16_enabled: false
+    gradient_clipping: 1.0
+    train_micro_batch_size_per_gpu: 4
+    gradient_accumulation_steps: 8
+    initial_scale_power: 16
+    loss_scale_window: 1000
+    hysteresis: 2
+    min_loss_scale: 1
+
+checkpoint:
+  save_dir: /data/cm2_lda/checkpoints/run_ae_8x
+  save_every_n_epochs: 1
+  keep_last_n: 50
+  resume_from: null
+
+logging:
+  run_name: cm2_ae_8x
+  output_dir: logs
+  log_dir: logs/run_ae_8x/loss_plots
+  val_every_n_epochs: 2
+  log_every_n_steps: 50
+  slow_data_threshold_s: 30
+  slow_compute_threshold_s: 30
+  console_level: INFO
+  file_level: null
+
+output_dir: /data/cm2_lda/checkpoints/run_ae_8x

@@ -32,4 +32,7 @@ transpond_with_logging = create_logging_wrapper(transpond)
 
 #print(pywrf.python_interface.python_da.__doc__)
 # WRF handles MPI initialization internally
-pywrf.plug.call_wrf_main(transpond_with_logging)
+try:
+    pywrf.plug.call_wrf_main(transpond_with_logging)
+finally:
+    transpond.print_timing_summary()

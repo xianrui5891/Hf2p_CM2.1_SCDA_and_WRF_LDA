@@ -1,0 +1,136 @@
+146c146
+<    integer ::  current_step,atm_step,current_step_s
+---
+>    integer ::  current_step,atm_step
+174a175
+>   real, dimension(:,:,:), allocatable,save :: corr_t_dayo_r,corr_t6ho_r,corr_t3ho_r,corr_t5dayo_r
+196a198
+> 
+606,610c608
+<  current_step_s = floor(60*grid%xtime) + config_flags%time_step ! zblu min change to S
+<  if(floor(60*grid%xtime)  == 0) current_step_s =0
+< 
+<  current_step = floor(grid%xtime) + 1   ! zblu min change to min
+<  if(current_step  == 0) current_step =1
+---
+>  current_step = floor(grid%xtime) + 1
+612d609
+< write(*,*)  'atm_step_s =====',  current_step_s
+788,791c785,787
+< !    domain 1  
+< write(*,*) 'solve zzzz',nlevl     
+<         nlonl = ide  !ide is from namelist , is e_we
+<         mlatl = jde  !jde is from namelist , is e_sn
+---
+> !    domain 1       
+>         nlonl = ide   !ide is from namelist , is e_we
+>         mlatl = jde   !jde is from namelist , is e_sn
+805,809c801
+<  current_step   = floor(grid%xtime)  + 1
+<  if(current_step  == 0) current_step =1
+<   current_step_s = floor(60*grid%xtime)   + config_flags%time_step ! zblu min change to S
+<  if(floor(60*grid%xtime)  == 0) current_step_s =0
+< 
+---
+>  current_step = floor(grid%xtime) + 1 
+821,822c813,814
+< ! ! init enkf only run once  .and. only run domain 1
+<  if (grid%init_fvada .and. (grid%id == 1 .or. grid%id == 2) ) then   
+---
+> 
+>  if (grid%init_fvada) then
+888a881,889
+>         allocate(corr_t_dayo_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33))
+>         corr_t_dayo_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33) = 0.0
+>         allocate(corr_t6ho_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33))
+>         corr_t6ho_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33) = 0.0
+>         allocate(corr_t3ho_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33))
+>         corr_t3ho_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33) = 0.0
+>         allocate(corr_t5dayo_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33))
+>         corr_t5dayo_r(grid%sm31:grid%em31,grid%sm32:grid%em32,grid%sm33:grid%em33) = 0.0
+> 
+988a990,992
+>         Varl%q(:,:,:) = 0.
+> !print *, SHAPE(Varl%q)
+> !
+993c997
+<                        k_end, kde, current_step,current_step_s, Varl, &
+---
+>                        k_end, kde, current_step, Varl, &
+999a1004
+>                         corr_t_dayo_r,corr_t6ho_r,corr_t3ho_r,corr_t5dayo_r,&
+1013,1015d1017
+< 
+< 
+< 
+3123c3125
+<   if(  mod( current_step_s ,360*60)==0 .and. myproc==81) then
+---
+>   if(  mod(current_step,360)==0 .and. myproc==81) then
+4310d4311
+< write(*,*) 'afterdiagnose_w',grid%psfc(grid%i_start(1)+10,grid%j_start(1)+10)
+4866c4867
+<                            grid%j_start(1),grid%j_end(1),&
+---
+>                            grid%j_start(1),grid%j_end(1),k_start,k_end,&
+4873c4874,4875
+<                         current_step,current_step_s,ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,ens_hfq_pso04,&
+---
+>                         corr_t_dayo_r,corr_t6ho_r,corr_t3ho_r,corr_t5dayo_r,&
+>                         current_step,ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,ens_hfq_pso04,&
+4877,4878c4879,4880
+<                         ens_hfq_pso17,ens_hfq_pso18,ens_hfq_pso19,ens_hfq_pso20,kkk_end,var_t,var_u )
+< 
+---
+>                         ens_hfq_pso17,ens_hfq_pso18,ens_hfq_pso19,ens_hfq_pso20,kkk_end,var_t,var_u,corr_all)
+> write(*,*) 'after_all'
+4883c4885
+<    write(*,*) 'mda must in domain 1111111'
+---
+> 
+4890,4892c4892
+<   ! if(  current_step_s==1*60 .or. mod(current_step_s,360*60)==0  ) then
+< 
+< 
+---
+>   if(  current_step==1 .or. mod(current_step,360)==0  ) then
+4895,4898d4894
+< !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+< if(  mod( current_step_s ,360*60)==0  .and. (grid%id == 1 .or. grid%id == 2) ) then
+<    write(*,*) 'mda must in domain 1111111'
+< 
+4908,4910d4903
+<  endif
+< !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+< 
+4911a4905,4908
+>     if (.not. config_flags%restart  )  CALL da_real_ptuq&
+>                 (grid,config_flags,corr_all,&
+>                 corr_t_dayo_r,corr_t6ho_r,corr_t3ho_r,corr_t5dayo_r,&
+>                  iii_end,jjj_end,kkk_end, ims,  ime,  jms,  jme,  kms,kme,atm_step)
+4916,4922c4913
+<  ! write(*,*)  'mu_new,day,min,hfq',mu_new_w_day(grid%i_start(1)+10,grid%j_start(1)+10),mu_new_w_min(grid%i_start(1)+10,grid%j_start(1)+10),mu_new_w_hfq(grid%i_start(1)+10,grid%j_start(1)+10)
+< !   write(*,*) 'psfc_new_dry_day,min,hfq',current_step,psfc_new_dry_day(grid%i_start(1)+10,grid%j_start(1)+10),&
+< !                                psfc_new_dry_min(grid%i_start(1)+10,grid%j_start(1)+10),psfc_new_dry_hfq(grid%i_start(1)+10,grid%j_start(1)+10)
+< !   write(*,*) 'mub,ptop,mu2',grid%mub(grid%i_start(1)+10,grid%j_start(1)+10),grid%p_top,grid%mu_2(grid%i_start(1)+10,grid%j_start(1)+10)
+< !   write(*,*) 'calc',current_step,-grid%mub(grid%i_start(1)+10,grid%j_start(1)+10)-grid%p_top-grid%mu_2(grid%i_start(1)+10,grid%j_start(1)+10)
+< !   write(*,*) 'corrhfq,day,min,6h',current_step,corr_ps_hfqo(grid%i_start(1)+10,grid%j_start(1)+10),corr_ps_dayo(grid%i_start(1)+10,grid%j_start(1)+10),corr_ps_mino(grid%i_start(1)+10,grid%j_start(1)+10),corr_psfc6ho(grid%i_start(1)+10,grid%j_start(1)+10)
+< !  write(*,*) '5daycor',corr_psfc5dayo(grid%i_start(1)+10,grid%j_start(1)+10)
+---
+>  endif
+4940a4932
+> 
+5000a4993
+> 
+5002a4996
+> 
+5007a5002
+> 
+5009a5005
+> 
+5010a5007
+> 
+5012d5008
+<    RETURN
+5013a5010
+>    RETURN

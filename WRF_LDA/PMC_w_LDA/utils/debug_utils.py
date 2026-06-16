@@ -69,7 +69,7 @@ class DebugPlotter:
             self._axs = axs
             self._fig.tight_layout()
 
-    def plot(self, it, loss_J, loss_background, loss_observation):
+    def plot(self, it, loss_J, loss_background, loss_observation) -> Tuple[str, str]:
         """追加数据并绘制（保存到文件）。
 
         返回 (image_filename, data_filename)
@@ -86,7 +86,6 @@ class DebugPlotter:
         self.loss_bg.append(ybg)
         self.loss_obs.append(yobs)
 
-    def close(self):
         # 打开（如尚未打开）
         self._open_figure_if_needed()
 
@@ -146,6 +145,10 @@ class DebugPlotter:
         self._fig.savefig(img_filename, dpi=self.dpi, bbox_inches='tight')
 
         # 将数据保存为 npz，覆盖当前会话文件；close() 后索引自增，下一会话新文件
+
+        return img_filename
+
+    def close(self):
         """关闭当前图像并清空内部缓存，下一次 plot 会新建文件并重新开始记录。"""
         if self._fig is not None:
             plt.close(self._fig)

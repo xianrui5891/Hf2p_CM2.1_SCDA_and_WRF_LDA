@@ -1,0 +1,10 @@
+{
+  "atm_glob": "/data/ouc/zhuxianrui/observation_data/era5_ps/ERA5_ps/1982/ps_era5_1982_*_cm2grid.nc",
+  "ocn_glob": "/data/ouc/zhuxianrui/observation_data/OISST_monthly/1982/oisst_on_cm2_masked_1982_*.nc",
+  "output_dir": "/data/ouc/zhuxianrui/CM2-f2py/out_nc_observation",
+  "output_name": "merged_observation.pt",
+  "atm_var": "ps1",
+  "ocn_var": "sst",
+  "atm_output_key": "ps1",
+  "ocn_output_key": "sst"
+}

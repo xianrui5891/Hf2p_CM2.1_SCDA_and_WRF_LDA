@@ -9,6 +9,7 @@ SUBROUTINE solve_interface ( grid )
    USE module_configure
    USE module_wrf_error
    USE python_interface
+   USE module_dm, ONLY : wrf_dm_max_real, wrf_dm_sum_real
 
    IMPLICIT NONE
 
@@ -44,6 +45,17 @@ SUBROUTINE solve_interface ( grid )
    REAL, parameter :: p00 = 100000.0
 
    INTEGER :: rank, ierr
+   LOGICAL, EXTERNAL :: wrf_dm_on_monitor
+   REAL :: t_lda_start, t_python_start
+   REAL :: lda_total_time, lda_f2py_time
+   REAL :: nproc_real
+   REAL :: lda_total_max, lda_f2py_max
+   REAL :: lda_total_avg, lda_f2py_avg
+   INTEGER, SAVE :: lda_timing_count = 0
+   REAL, SAVE :: lda_total_max_sum = 0.0
+   REAL, SAVE :: lda_total_avg_sum = 0.0
+   REAL, SAVE :: lda_f2py_max_sum = 0.0
+   REAL, SAVE :: lda_f2py_avg_sum = 0.0
    INTEGER                         :: ids , ide , jds , jde , kds , kde , &
                                       ims , ime , jms , jme , kms , kme , &
                                       ips , ipe , jps , jpe , kps , kpe
@@ -74,6 +86,8 @@ SUBROUTINE solve_interface ( grid )
         IF( MOD( minutesSinceSimulationStart_ , REAL(config_flags%history_interval) ) == 0. ) THEN
             WRITE(mess,'("WRF_LDA_START DOMAIN ID = ",I3)') grid%id
             CALL WRF_MESSAGE ( mess )
+            t_lda_start = now_time()
+            lda_f2py_time = 0.0
 
             CALL get_ijk_from_grid (  grid ,                   &
                              ids, ide, jds, jde, kds, kde,    &
@@ -150,7 +164,9 @@ SUBROUTINE solve_interface ( grid )
             
             WRITE(mess,*) "start_lda!"
             CALL WRF_MESSAGE ( mess )
+            t_python_start = now_time()
             CALL python_da(current_timestr_, x_size, y_size, z_size, errf_u, errf_v, errf_t, errf_q, xlat, xlon)
+            lda_f2py_time = now_time() - t_python_start
             WRITE(mess,*) "end_lda!"
             CALL WRF_MESSAGE ( mess )
             
@@ -187,6 +203,37 @@ SUBROUTINE solve_interface ( grid )
             DEALLOCATE(errf_q)
             DEALLOCATE(xlon)
             DEALLOCATE(xlat)
+            lda_total_time = now_time() - t_lda_start
+
+            nproc_real = wrf_dm_sum_real(1.0)
+            lda_total_max = wrf_dm_max_real(lda_total_time)
+            lda_f2py_max = wrf_dm_max_real(lda_f2py_time)
+            lda_total_avg = wrf_dm_sum_real(lda_total_time) / MAX(nproc_real, 1.0)
+            lda_f2py_avg = wrf_dm_sum_real(lda_f2py_time) / MAX(nproc_real, 1.0)
+            lda_timing_count = lda_timing_count + 1
+            lda_total_max_sum = lda_total_max_sum + lda_total_max
+            lda_total_avg_sum = lda_total_avg_sum + lda_total_avg
+            lda_f2py_max_sum = lda_f2py_max_sum + lda_f2py_max
+            lda_f2py_avg_sum = lda_f2py_avg_sum + lda_f2py_avg
+
+            IF ( wrf_dm_on_monitor() ) THEN
+                WRITE(mess,'("WRF_LDA_TIMING call=",I6," da_total max/avg = ",F10.4," / ",F10.4," s")') &
+                    lda_timing_count, lda_total_max, lda_total_avg
+                CALL WRF_MESSAGE ( mess )
+                WRITE(mess,'("WRF_LDA_TIMING call=",I6," f2py_python max/avg = ",F10.4," / ",F10.4," s")') &
+                    lda_timing_count, lda_f2py_max, lda_f2py_avg
+                CALL WRF_MESSAGE ( mess )
+                WRITE(mess,'("WRF_LDA_TIMING_SUM calls=",I6," da_total max_sum/avg_sum = ",F12.4," / ",F12.4," s")') &
+                    lda_timing_count, lda_total_max_sum, lda_total_avg_sum
+                CALL WRF_MESSAGE ( mess )
+                WRITE(mess,'("WRF_LDA_TIMING_SUM calls=",I6," f2py_python max_sum/avg_sum = ",F12.4," / ",F12.4," s")') &
+                    lda_timing_count, lda_f2py_max_sum, lda_f2py_avg_sum
+                CALL WRF_MESSAGE ( mess )
+                WRITE(mess,'("WRF_LDA_TIMING_NOTE da_total includes gather/python/distribution.")')
+                CALL WRF_MESSAGE ( mess )
+                WRITE(mess,'("WRF_LDA_TIMING_NOTE f2py_python is only CALL python_da.")')
+                CALL WRF_MESSAGE ( mess )
+            END IF
         END IF
     END IF
 # if ( WRF_CHEM == 1 )
@@ -236,4 +283,3 @@ SUBROUTINE solve_interface ( grid )
 #endif
 
 END SUBROUTINE solve_interface
-

@@ -1,0 +1,14 @@
+{
+  "storage_root": "/data/cm2_lda",
+  "raw_dir": "/data/cm2_lda/raw",
+  "data_dir": "/data/cm2_lda/data",
+  "runs_dir": "/data/cm2_lda/checkpoints",
+  "analysis_dir": "/data/cm2_lda/analysis_outputs",
+  "nmc_output_dir": "/data/cm2_lda/nmc_outputs",
+  "processed_data_path": "/data/assim-f2py-test/work_ctl",
+  "metadata_path": "/data/ouc/zhuxianrui/CM2-f2py/CM2-lda/checkpoints/ae_8x/normalization_metadata.json",
+  "normalization_stats_path": "/data/ouc/zhuxianrui/CM2-f2py/CM2-lda/checkpoints/ae_8x/normalization_stats.json",
+  "observation_path": "/data/ouc/zhuxianrui/CM2-f2py/out_nc_observation/merged_observation.pt",
+  "ae_model_path": "/data/ouc/zhuxianrui/CM2-f2py/CM2-lda/checkpoints/ae_8x/last_model.pth",
+  "nmc_background_covariance_path": "/data/ouc/zhuxianrui/CM2-f2py/CM2-lda/checkpoints/ae_8x/latent_nmc_background_covariance.npz"
+}

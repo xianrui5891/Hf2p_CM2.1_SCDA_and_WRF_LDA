@@ -1,0 +1,22 @@
+#PBS -N WRF371_13_7_422
+#PBS -l nodes=20:ppn=24
+##PBS -l nodes=c39b01:ppn=24+c39b02:ppn=24+c39b03:ppn=24+c39b04:ppn=24+c39b05:ppn=24+c39b06:ppn=24+c39b08:ppn=24+c39b09:ppn=24
+##PBS -l  nodes=c04b01:ppn=24+c04b03:ppn=24+c04b04:ppn=24+c04b08:ppn=24+c04b10:ppn=24+c04b11:ppn=24+c04b12:ppn=24+c04b14:ppn=24+c04b15:ppn=24+c04b16:ppn=24
+#PBS -l walltime=999:00:00
+##PBS -q q_fcst
+#PBS -q  q_lmkli
+##PBS -q  q_csywz 
+##PBS -q q_qnlm
+#PBS -V
+#PBS -S /bin/bash 
+
+### Set  environment###
+source /home/app_path/intel2017.sh
+export NETCDF=/home/lmkli/src/netcdf363intel2017
+
+
+cd $PBS_O_WORKDIR
+NP=`cat $PBS_NODEFILE | wc -l`
+
+mpirun -genv I_MPI_FABRICS shm:tmi  -machinefile $PBS_NODEFILE -n $NP ./wrf.exe &> w.log
+

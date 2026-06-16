@@ -1,0 +1,1573 @@
+module module_ada_driver_fv_mod
+  !
+  ! This is the top-level module for ocean data assimilation.
+  !
+    USE module_utility  
+! it seems like that this module will get type(wrfu_time)
+    USE module_ada_types_mod, only : assim_data_type,ada_field_type,ada_grid_type
+!    USE module_ada_core_mod, only : ada_core_init, get_ncep_field
+    USE module_ada_core_mod, only :  get_ncep_field
+    use module_eakf_ada_mod, only : ensemble_filter_atm_init
+    USE module_eakf_ada_mod, only : ensemble_filter_atm_hfq,ensemble_filter_atm_day,ensemble_filter_atm_min,ensemble_filter_atm_6h,&
+                                  & ensemble_filter_atm_3h,ensemble_filter_atm_1h,ensemble_filter_atm_5day
+    USE netcdf
+      USE module_machine  !wangj0710
+   USE module_driver_constants  !wangj0710
+    USE module_dm
+      USE module_domain, ONLY : domain
+              USE module_configure, ONLY : grid_config_rec_type
+  implicit none
+ INCLUDE 'mpif.h' 
+  private
+  public :: init_fv_ada, fv_ada,isc_flth, iec_flth, jsc_flth,jec_flth,isd,&
+            ied, jsd, jed, kms, kme,assim_frequency, heaada_enssize,&
+                mpi_comm_here, ierr, myproc,nproc
+real, public, parameter :: PI      = 3.14159265358979323846
+real, public, parameter :: RAD_TO_DEG=PI/180.
+  INTEGER mpi_comm_here, ierr, myproc,nproc
+  integer, parameter :: NO_ASSIM = 0, OI=1, EAKF=2
+  integer, parameter :: MAX_ATM_OBS = 20000
+  integer, parameter :: MAX_SICE_OBS = 50000
+  integer, parameter :: MAX_ENSEMBLE_SIZE = 50
+
+  integer :: heaada_enssize = 20
+  integer :: heahfq_minintv = 20
+  integer :: isd, ied, jsd, jed, kms, kme !halo domain
+  integer :: isc_flth, iec_flth, jsc_flth, jec_flth   !calculate domain
+  integer :: ni, nj, nk
+  integer, dimension(2) :: atm_layout, assim_layout
+  integer :: nk_asm, nk_sice
+  integer :: nk_inf = 1  ! x1y add for inflation levels
+  integer :: filter_halo = 10
+  integer :: assim_frequency = 6
+  real    :: dt_const_ps = 1.0 !lulv 2020-05-24
+  real    :: cov_inflate = 1.0
+  real    :: corr_coef = 1.0 !lulv add for adjust dt_const in fv_physics.F90
+  logical :: ida_up = .false.
+  logical :: sequential_filter = .false.
+!  logical :: hea_hfq = .true. !lulv 20200724
+!  logical :: hea_day = .false. !lulv 20200724
+!  logical :: hea_mon = .false. !lulv 20200724
+  logical :: tra_eakf = .false. !lulv 20200606
+  type(ada_field_type), dimension(MAX_ENSEMBLE_SIZE) :: ens_hfq_ps0,ens_min_ps0,ens_day_ps0,ens_mon_ps0
+! 20 ensb info
+  type(ada_field_type), dimension(MAX_ENSEMBLE_SIZE) :: ens_6h_ps0,ens_3h_ps0,ens_1h_ps0,ens_5day_ps0
+  type(ada_field_type), dimension(MAX_ENSEMBLE_SIZE) :: ps_ens_tmp,ps_ens_tmp_hour
+  type(ada_field_type), dimension(60) :: ps_ens_tmp_min 
+  type(ada_field_type), dimension(MAX_ENSEMBLE_SIZE) :: ens_hfq_t, ens_hfq_q !0621
+  type(ada_field_type), dimension(MAX_ENSEMBLE_SIZE) :: ens_hfq_u, ens_hfq_v !0621
+  type(ada_field_type) :: ens_hfq_ps,ens_day_ps,ens_min_ps !current step info
+  type(ada_field_type) :: ens_6h_ps,ens_3h_ps,ens_1h_ps,ens_5day_ps
+  type(assim_data_type) :: Atmos_obs
+
+!  real, dimension(:,:,:), allocatable, save :: corr_t, corr_q, corr_u, corr_v
+!  real, dimension(:,:), allocatable, save :: corr_ps
+!  real, dimension(:,:,:), allocatable, save :: corr_t_hfq, corr_q_hfq,corr_u_hfq, corr_v_hfq 
+  real, dimension(:,:), allocatable, save :: corr_ps_hfq,corr_ps_day,corr_ps_min !corr_ps_mon
+  real, dimension(:,:), allocatable, save :: corr_ps_6h,corr_ps_3h,corr_ps_1h,corr_ps_5day
+!  real, dimension(:,:,:), allocatable, save :: corr_ti, corr_ui, corr_vi, corr_qi
+!  real, dimension(:,:), allocatable :: work
+!  type(ada_grid_type) T_grid_hea
+  type(ada_grid_type) :: T_grid
+  integer :: ensemble_size = 12
+
+
+contains  
+  
+  subroutine init_fv_ada(grid,Atm_time, nlon,mlat, & 
+                        isd, ied, jsd, jed, kms, kme, &
+                        isc_flth, iec_flth, jsc_flth, jec_flth, &
+                        k_end,kde, atm_step, Var_xy,corr_ps_hfqo,corr_ps_mino,corr_ps_dayo, &
+                        corr_psfc6ho,corr_psfc3ho,corr_psfc1ho,corr_psfc5day, &
+                       ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,ens_hfq_pso04,&
+                       ens_hfq_pso05,ens_hfq_pso06,ens_hfq_pso07,ens_hfq_pso08,&
+                        ens_hfq_pso09,ens_hfq_pso10,ens_hfq_pso11,ens_hfq_pso12,& 
+                        ens_hfq_pso13,ens_hfq_pso14,ens_hfq_pso15,ens_hfq_pso16,& 
+                        ens_hfq_pso17,ens_hfq_pso18,ens_hfq_pso19,ens_hfq_pso20,&
+                        hea_hfq_1,hea_hfq_min,hea_day,hea_mon,hea_6h,hea_3h,hea_1h)
+
+    TYPE ( domain ), INTENT(INOUT) :: grid
+    TYPE(WRFU_Time), intent(in), target        :: Atm_time
+    integer, intent(in) :: k_end,kde,nlon,mlat
+    integer, intent(in) :: isd, ied, jsd, jed, kms, kme !halo domain
+    integer, intent(in) :: isc_flth, iec_flth, jsc_flth, jec_flth   !calculate domain
+    integer :: m,i,j,nlev,atm_step
+    type(assim_data_type), intent(in) :: Var_xy
+    real,dimension(:,:), allocatable,intent(in) :: corr_ps_hfqo
+    real,dimension(:,:), allocatable,intent(in) :: corr_ps_mino
+    real,dimension(:,:), allocatable,intent(in) :: corr_ps_dayo
+    real,dimension(:,:), allocatable,intent(in) :: corr_psfc6ho
+    real,dimension(:,:), allocatable,intent(in) :: corr_psfc3ho
+    real,dimension(:,:), allocatable,intent(in) :: corr_psfc1ho 
+    real,dimension(:,:), allocatable,intent(in) :: corr_psfc5day
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso01,ens_hfq_pso02
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso03,ens_hfq_pso04
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso05,ens_hfq_pso06
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso07,ens_hfq_pso08
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso09,ens_hfq_pso10
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso11,ens_hfq_pso12
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso13,ens_hfq_pso14
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso15,ens_hfq_pso16
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso17,ens_hfq_pso18
+   real, dimension(:,:), allocatable, intent(in) :: ens_hfq_pso19,ens_hfq_pso20
+       logical,intent(in) :: hea_hfq_1,hea_hfq_min,hea_day,hea_mon,hea_6h,hea_3h,hea_1h
+    real, pointer, dimension(:) :: lon => NULL()
+    real, pointer, dimension(:) :: lat => NULL()
+
+    character(len=200) :: file_obs1
+     integer :: ierr5,ierr6,ierr7,ierr8,varid,ierr9,ierr10,ierr11,ierr12,ncid2,ncid3
+
+
+       nlev = min (k_end, kde-1)
+!       ni = ied
+!       nj = jed
+       ni = nlon
+       nj = mlat
+       nk = nlev
+
+
+           allocate(Atmos_obs%ps(1:nlon,1:mlat))
+           allocate(Atmos_obs%phis(1:nlon,1:mlat))
+           allocate(T_grid%x(1:nlon),T_grid%y(1:mlat))
+           allocate(lon(1:nlon))
+           allocate(lat(1:mlat))
+           
+           Atmos_obs%ps(:,:) = 0.0
+           Atmos_obs%phis(:,:) = 0.0
+           T_grid%x(:) = 0.0
+           T_grid%y(:) = 0.0
+
+           lon(:) = 0.0
+           lat(:) = 0.0
+
+     do m=1, heaada_enssize
+             allocate(ens_hfq_t(m)%data(isd:ied,jsd:jed,nlev))
+             allocate(ens_hfq_q(m)%data(isd:ied,jsd:jed,nlev))
+             allocate(ens_hfq_u(m)%data(isd:ied,jsd:jed,nlev))
+             allocate(ens_hfq_v(m)%data(isd:ied,jsd:jed,nlev))
+             ens_hfq_t(m)%data(isd:ied,jsd:jed,nlev)= 0.0
+             ens_hfq_q(m)%data(isd:ied,jsd:jed,nlev)= 0.0
+             ens_hfq_u(m)%data(isd:ied,jsd:jed,nlev)= 0.0
+             ens_hfq_v(m)%data(isd:ied,jsd:jed,nlev)= 0.0
+
+        allocate(ens_hfq_ps0(m)%data(isd:ied,jsd:jed,1))
+        ens_hfq_ps0(m)%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_min_ps0(m)%data(isd:ied,jsd:jed,1))
+        ens_min_ps0(m)%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_day_ps0(m)%data(isd:ied,jsd:jed,1))
+        ens_day_ps0(m)%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_6h_ps0(m)%data(isd:ied,jsd:jed,1))
+        ens_6h_ps0(m)%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_5day_ps0(m)%data(isd:ied,jsd:jed,1))
+        ens_5day_ps0(m)%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_3h_ps0(m)%data(isd:ied,jsd:jed,1))
+        ens_3h_ps0(m)%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_1h_ps0(m)%data(isd:ied,jsd:jed,1))
+        ens_1h_ps0(m)%data(isd:ied,jsd:jed,1) = 0.0
+     enddo
+
+        allocate(ens_hfq_ps%data(isd:ied,jsd:jed,1))
+        ens_hfq_ps%data(isd:ied,jsd:jed,1) = 0.0 
+
+        allocate(ens_day_ps%data(isd:ied,jsd:jed,1))
+        ens_day_ps%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_min_ps%data(isd:ied,jsd:jed,1))
+        ens_min_ps%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_6h_ps%data(isd:ied,jsd:jed,1))
+        ens_6h_ps%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_3h_ps%data(isd:ied,jsd:jed,1))
+        ens_3h_ps%data(isd:ied,jsd:jed,1) = 0.0
+        allocate(ens_1h_ps%data(isd:ied,jsd:jed,1))
+        ens_1h_ps%data(isd:ied,jsd:jed,1) = 0.0
+
+        allocate(ens_5day_ps%data(isd:ied,jsd:jed,1))
+        ens_5day_ps%data(isd:ied,jsd:jed,1) = 0.0
+
+        do m=1,heahfq_minintv !wangj 202109
+           allocate(ps_ens_tmp(m)%data(isd:ied,jsd:jed,1:1))
+           ps_ens_tmp(m)%data(isd:ied,jsd:jed,1:1)=0.0
+        enddo
+
+          do m=1,60 !for daily mean, wangjj 20211130
+             allocate(ps_ens_tmp_min(m)%data(isd:ied,jsd:jed,1:1))
+             ps_ens_tmp_min(m)%data(isd:ied,jsd:jed,1:1) = 0.0
+          enddo
+
+          do m=1,24 !for daily mean, wangjj 20211130
+             allocate(ps_ens_tmp_hour(m)%data(isd:ied,jsd:jed,1:1))
+             ps_ens_tmp_hour(m)%data(isd:ied,jsd:jed,1:1) =0.0
+          enddo
+
+!          allocate(corr_t_hfq(isd:ied,jsd:jed,1:nlev),corr_q_hfq(isd:ied,jsd:jed,1:nlev))
+!          allocate(corr_u_hfq(isd:ied,jsd:jed,1:nlev),corr_v_hfq(isd:ied,jsd:jed,1:nlev))
+          allocate(corr_ps_hfq(isd:ied,jsd:jed))
+          allocate( corr_ps_day(isd:ied,jsd:jed))
+          allocate( corr_ps_min(isd:ied,jsd:jed))
+          allocate( corr_ps_6h(isd:ied,jsd:jed))
+          allocate( corr_ps_3h(isd:ied,jsd:jed))
+          allocate( corr_ps_1h(isd:ied,jsd:jed))
+          allocate( corr_ps_5day(isd:ied,jsd:jed))
+!          allocate(corr_ps_mon(isd:ied,jsd:jed))
+
+!          corr_t_hfq(:,:,:) = 0.0
+!          corr_q_hfq(:,:,:) = 0.0
+!          corr_u_hfq(:,:,:) = 0.0
+!          corr_v_hfq(:,:,:) = 0.0
+          corr_ps_hfq(:,:) = 0.0
+          corr_ps_day(:,:) = 0.0
+          corr_ps_6h(:,:) = 0.0
+          corr_ps_3h(:,:) = 0.0
+          corr_ps_1h(:,:) = 0.0
+          corr_ps_5day(:,:) = 0.0
+          corr_ps_min(:,:) = 0.0
+!          corr_ps_mon(:,:) = 0.0
+!deallocate(corr_ps_hfq)
+
+!        file_obs1="/home/lmkli/wangj/test/WRF371/v3_0509/fortran_readnc/atmos_obs_1.nc"
+      file_obs1="/home/lmkli/wangj/test/WRF371/v3_0509/fortran_readnc/wrf_atmos_obs.nc"
+        ierr5=nf90_open(trim(file_obs1),nf90_nowrite,ncid2)
+        ierr6=nf90_inq_varid(ncid2,'lat',varid)
+        ierr7=nf90_get_var(ncid2,varid,lat)
+        ierr10=nf90_inq_varid(ncid2,'lon',varid)
+        ierr11=nf90_get_var(ncid2,varid,lon)
+        ierr12 = nf90_close(ncid2)
+
+        T_grid%x = lon(:)
+        T_grid%y = lat(:)
+
+
+
+      if(hea_day)     call read_data_day(grid,ens_day_ps0,isd, ied,jsd,jed )
+      if(hea_6h)      call read_data_6h(grid,ens_6h_ps0,isd, ied,jsd,jed )
+      if(hea_3h)      call read_data_3h(grid,ens_3h_ps0,isd, ied,jsd,jed )
+      if(hea_1h)      call read_data_1h(grid,ens_1h_ps0,isd, ied,jsd,jed )
+      if(hea_mon)      call read_data_5day(grid,ens_5day_ps0,isd, ied,jsd,jed )
+
+      write(*,*) 'init_day1',atm_step,isd+10,jsd+10,ens_day_ps0(1)%data(isd+10,jsd+10,1)
+      write(*,*) 'init_day20',atm_step,isd+10,jsd+10,ens_day_ps0(20)%data(isd+10,jsd+10,1)
+      write(*,*) 'init_3h1',atm_step,isd+10,jsd+10,ens_3h_ps0(1)%data(isd+10,jsd+10,1)
+      write(*,*) 'init_3h20',atm_step,isd+10,jsd+10,ens_3h_ps0(20)%data(isd+10,jsd+10,1)
+
+
+        call ensemble_filter_atm_init(ensemble_size,heaada_enssize)
+
+  end subroutine init_fv_ada
+
+
+
+  subroutine fv_ada(grid,config_flags,Atm_Time,Atm_var_g,corr_ps_hfqo,corr_ps_mino,corr_ps_dayo,&
+                        corr_psfc6ho,corr_psfc3ho,corr_psfc1ho,corr_psfc5day, &
+                        atm_step, isd, ied, jsd, jed, kms, kme, &
+                        isc_flth, iec_flth, jsc_flth, jec_flth, &
+                        hea_hfq_1,hea_hfq_min,hea_day,hea_mon,hea_6h,hea_3h,hea_1h, &
+                        dt_const_ps_hfq,dt_const_ps_day,dt_const_ps_mon, &
+                       ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,ens_hfq_pso04,&
+                       ens_hfq_pso05,ens_hfq_pso06,ens_hfq_pso07,ens_hfq_pso08,&
+                        ens_hfq_pso09,ens_hfq_pso10,ens_hfq_pso11,ens_hfq_pso12,& 
+                        ens_hfq_pso13,ens_hfq_pso14,ens_hfq_pso15,ens_hfq_pso16,& 
+                        ens_hfq_pso17,ens_hfq_pso18,ens_hfq_pso19,ens_hfq_pso20)
+! no ak bk
+     TYPE ( domain ), INTENT(INOUT) :: grid
+     TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+  TYPE(WRFU_Time), intent(in), target        :: Atm_time
+  TYPE(assim_data_type), intent(inout) :: Atm_var_g
+  real, dimension(:,:), allocatable,intent(inout) :: corr_ps_hfqo
+  real, dimension(:,:), allocatable,intent(inout) :: corr_ps_mino
+  real, dimension(:,:), allocatable,intent(inout) ::  corr_ps_dayo
+   real, dimension(:,:), allocatable,intent(inout) :: corr_psfc6ho
+   real, dimension(:,:), allocatable,intent(inout) :: corr_psfc3ho
+   real, dimension(:,:), allocatable,intent(inout) :: corr_psfc1ho
+   real, dimension(:,:), allocatable,intent(inout) :: corr_psfc5day
+  real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso01
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso02
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso03
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso04
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso05
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso06
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso07
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso08
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso09
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso10
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso11
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso12
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso13
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso14
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso15
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso16
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso17
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso18
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso19
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso20
+
+
+  integer, intent(in)  :: atm_step
+  integer, intent(in)  :: isc_flth, iec_flth, jsc_flth, jec_flth
+  integer,intent(in)   :: isd, ied, jsd, jed, kms, kme !halo domain
+
+  INTEGER                         :: yr, month, day, hr, minute, sec, rc
+
+    integer :: m,n, k, i, j
+    integer :: num_obs, num_obs_sice_up
+    integer :: second0, day0
+    integer :: is, ie, hs, he, vs, ve
+    real    :: inflate
+    integer :: i_ll, j_ll, k_ll !lulv
+    integer :: i_t,j_t
+    logical :: used
+    logical,intent(in) :: hea_hfq_1,hea_hfq_min,hea_day,hea_mon,hea_6h,hea_3h,hea_1h
+    real,intent(in) :: dt_const_ps_hfq,dt_const_ps_day,dt_const_ps_mon
+!    integer, parameter :: ensemble_min_day=1440
+
+!    ied  = min( ied,559 )
+!    jed   = min( jed,409 )
+
+     CALL WRFU_TimeGet( Atm_Time, YY=yr, dayOfYear=day, H=hr, M=minute,S=sec, rc=rc)
+
+write(*,*) 'ada_time',atm_step,yr,day,hr,minute
+
+    CALL wrf_get_myproc( myproc )
+    CALL wrf_get_nproc( nproc )
+
+write(*,*) 'ada_begin1',atm_step
+        if(hea_hfq_1) call mk_ens_hf_ada(Atm_var_g ,ens_hfq_ps0,atm_step,isd,ied, jsd, jed)  
+write(*,*) 'ada_begin2',atm_step
+        if(hea_hfq_min) call mk_ens_hf_ada_min(Atm_var_g,ens_min_ps0,atm_step,isd,ied, jsd, jed)
+write(*,*) 'ada_begin3',atm_step
+!     if(hea_day)     call mk_ens_hf_ada_day(Atm_var_g,ens_day_ps0,atm_step,isd,ied,jsd,jed)
+     if(hea_day)  call mk_ens_hf_ada_day2(config_flags,Atm_var_g,ens_day_ps0,atm_step,isd,ied,jsd,jed)
+     if(hea_6h)   call                   mk_ens_ada_6h2(Atm_var_g,ens_6h_ps0,atm_step,isd,ied, jsd, jed)
+     if(hea_3h)   call mk_ens_ada_3h2(Atm_var_g,ens_3h_ps0,atm_step,isd,ied, jsd, jed)
+     if(hea_1h)   call mk_ens_ada_1h2(Atm_var_g,ens_3h_ps0,atm_step,isd,ied,jsd, jed)
+     if(hea_1h)   call mk_ens_ada_5day2(Atm_var_g,ens_5day_ps0,atm_step,isd,ied,jsd,jed)
+
+!                call    get_a_to_b(ens_day_ps0,ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,&
+!                call    get_a_to_b(ens_3h_ps0,ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,&
+                call    get_a_to_b(ens_5day_ps0,ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,&
+                        ens_hfq_pso04,ens_hfq_pso05,ens_hfq_pso06,ens_hfq_pso07,ens_hfq_pso08,&
+                        ens_hfq_pso09,ens_hfq_pso10,ens_hfq_pso11,ens_hfq_pso12,&
+                        ens_hfq_pso13,ens_hfq_pso14,ens_hfq_pso15,ens_hfq_pso16,ens_hfq_pso17,&
+                        ens_hfq_pso18,ens_hfq_pso19,ens_hfq_pso20,&
+                        isd,ied,jsd,jed)
+
+        write(*,*) 'logical,hfq,min',atm_step,hea_hfq_1,hea_hfq_min,dt_const_ps_hfq,dt_const_ps_day,dt_const_ps_mon
+
+
+
+
+        if(  mod(atm_step,360)==0  ) then
+!        if (atm_step >= 28800) then
+         if (atm_step >= 720) then
+              call get_ncep_field(Atm_Time, Atmos_obs, assim_frequency,atm_step)
+
+                if(hea_6h)  then
+
+write(*,*) 'running hea_6h ada_driver'
+
+                     do j_t = jsd,jed
+                     do i_t = isd,ied
+                         corr_ps_6h(i_t,j_t)        =  Atm_var_g%ps(i_t,j_t)
+                         ens_6h_ps%data(i_t,j_t,1) =  Atm_var_g%ps(i_t,j_t)
+                     enddo
+                     enddo
+
+                   call ensemble_filter_atm_6h(grid,ens_hfq_t(1:heaada_enssize),ens_hfq_q(1:heaada_enssize),&
+                   & ens_hfq_u(1:ensemble_size),ens_hfq_v(1:heaada_enssize),ens_6h_ps0(1:heaada_enssize),ens_6h_ps,&
+                   & Atm_var_g, Atmos_obs,isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo, ni, nj, nk, &
+                   &  T_grid, Atm_time,atm_step,isd, ied, jsd,jed) !no akbk
+
+                     do j_ll = jsc_flth,jec_flth
+                     do i_ll = isc_flth,iec_flth
+                        if(Atm_var_g%y(i_ll,j_ll) .le. 80) then
+                          corr_ps_6h(i_ll,j_ll) = (ens_6h_ps%data(i_ll,j_ll,1)-corr_ps_6h(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        else
+                         corr_ps_6h(i_ll,j_ll) =  (ens_6h_ps%data(i_ll,j_ll,1)-corr_ps_6h(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)*&
+                                                & cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        endif
+
+                        corr_psfc6ho(i_ll,j_ll) = corr_ps_6h(i_ll,j_ll)
+
+                    enddo
+                    enddo
+
+                endif !hea_6h
+
+                if(hea_3h)  then
+
+        write(*,*) 'running hea_3h ada_driver'
+                     do j_t = jsd,jed
+                     do i_t = isd,ied
+                         corr_ps_3h(i_t,j_t)        =  Atm_var_g%ps(i_t,j_t)
+                         ens_3h_ps%data(i_t,j_t,1) =  Atm_var_g%ps(i_t,j_t)
+                     enddo
+                     enddo
+
+
+                   call ensemble_filter_atm_3h(grid,ens_hfq_t(1:heaada_enssize),ens_hfq_q(1:heaada_enssize),&
+                   & ens_hfq_u(1:ensemble_size),ens_hfq_v(1:heaada_enssize),ens_3h_ps0(1:heaada_enssize),ens_3h_ps,&
+                   & Atm_var_g,Atmos_obs,isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo, ni, nj, nk, &
+                   &  T_grid, Atm_time,atm_step,isd, ied, jsd,jed) !no akbk
+
+                     do j_ll = jsc_flth,jec_flth
+                     do i_ll = isc_flth,iec_flth
+                        if(Atm_var_g%y(i_ll,j_ll) .le. 80) then
+                          corr_ps_3h(i_ll,j_ll) = (ens_3h_ps%data(i_ll,j_ll,1)-corr_ps_3h(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        else
+                         corr_ps_3h(i_ll,j_ll) = (ens_3h_ps%data(i_ll,j_ll,1)-corr_ps_3h(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)*&
+                                                & cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        endif
+                        corr_psfc3ho(i_ll,j_ll) = corr_ps_3h(i_ll,j_ll)
+                     enddo
+                     enddo
+                endif !hea_3h
+
+                if(hea_1h)  then
+
+        write(*,*) 'running hea_1h ada_driver'
+                     do j_t = jsd,jed
+                     do i_t = isd,ied
+                         corr_ps_1h(i_t,j_t)        =  Atm_var_g%ps(i_t,j_t)
+                         ens_1h_ps%data(i_t,j_t,1) =  Atm_var_g%ps(i_t,j_t)
+                     enddo
+                     enddo
+             call  ensemble_filter_atm_1h(grid,ens_hfq_t(1:heaada_enssize),ens_hfq_q(1:heaada_enssize),&
+             & ens_hfq_u(1:ensemble_size),ens_hfq_v(1:heaada_enssize),ens_1h_ps0(1:heaada_enssize),ens_1h_ps,&
+             &  Atm_var_g,Atmos_obs,isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo, ni, nj, nk,&
+                   &  T_grid, Atm_time,atm_step,isd, ied, jsd,jed) !no akbk
+
+                     do j_ll = jsc_flth,jec_flth
+                     do i_ll = isc_flth,iec_flth
+                        if(Atm_var_g%y(i_ll,j_ll) .le. 80) then
+                          corr_ps_1h(i_ll,j_ll) =  (ens_1h_ps%data(i_ll,j_ll,1)-corr_ps_1h(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        else
+                         corr_ps_1h(i_ll,j_ll) = (ens_1h_ps%data(i_ll,j_ll,1)-corr_ps_1h(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)*&
+                                                &cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        endif
+                        corr_psfc1ho(i_ll,j_ll) = corr_ps_1h(i_ll,j_ll)
+                     enddo
+                     enddo
+                endif !hea_1h
+
+
+
+
+                if(hea_day) then
+write(*,*) 'running hea_day ada_driver'
+
+                     do j_t = jsd,jed
+                     do i_t = isd,ied
+                         corr_ps_day(i_t,j_t) = Atm_var_g%ps(i_t,j_t)
+                         ens_day_ps%data(i_t,j_t,1) = Atm_var_g%ps(i_t,j_t)
+                     enddo
+                     enddo
+
+!        do j_ll = jsd,jed
+!        do i_ll = isd,ied
+!          write(*,'("ps_step=",1xi5,1xi3,1xi3,1xi3,1xf6.2,1xf6.2,1xf18.2)')&
+!           atm_step,myproc,i_ll,j_ll,T_grid%x(i_ll),T_grid%y(j_ll),Atm_var_g%ps(i_ll,j_ll)
+!        enddo
+!        enddo
+
+          call ensemble_filter_atm_day(grid,ens_hfq_t(1:heaada_enssize),ens_hfq_q(1:heaada_enssize),&
+         & ens_hfq_u(1:ensemble_size),ens_hfq_v(1:heaada_enssize),ens_day_ps0(1:heaada_enssize),ens_day_ps,&
+                   & Atm_var_g, Atmos_obs, isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo, ni, nj, nk, &
+                   &  T_grid, Atm_time,atm_step,isd, ied, jsd,jed) !no akbk
+
+                     do j_ll = jsc_flth,jec_flth
+                     do i_ll = isc_flth,iec_flth
+!                do j_ll = jsd,jed
+!                do i_ll = isd,ied
+
+!                        !hudu to du
+
+                        if(Atm_var_g%y(i_ll,j_ll) .le. 80) then
+                          corr_ps_day(i_ll,j_ll) = (ens_day_ps%data(i_ll,j_ll,1)-corr_ps_day(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        else
+                         corr_ps_day(i_ll,j_ll) = (ens_day_ps%data(i_ll,j_ll,1)-corr_ps_day(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)*&
+                                                & cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        endif
+
+                        corr_ps_dayo(i_ll,j_ll) = corr_ps_day(i_ll,j_ll)
+
+                    enddo
+                    enddo
+
+!        do j_ll = jsd,jed
+!        do i_ll = isd,ied
+
+!          write(*,'("ensend,corrend",1xi5,1xi3,1xi3,1xi3,1xf6.2,1xf6.2,1xf18.2,1xf18.2)')&
+!           atm_step,myproc,i_ll,j_ll,T_grid%x(i_ll),T_grid%y(j_ll),ens_day_ps%data(i_ll,j_ll,1),corr_ps_day(i_ll,j_ll)
+
+!        enddo
+!        enddo
+
+
+                endif !hea_day
+
+!hea_hfq_min
+                if(hea_hfq_min) then
+write(*,*) 'running hea_min ada_driver'
+                     do j_t = jsd,jed
+                     do i_t = isd,ied
+                         corr_ps_min(i_t,j_t) = Atm_var_g%ps(i_t,j_t)
+                         ens_min_ps%data(i_t,j_t,1) = Atm_var_g%ps(i_t,j_t)
+                     enddo
+                     enddo
+
+                   call ensemble_filter_atm_min(grid,ens_hfq_t(1:heaada_enssize),ens_hfq_q(1:heaada_enssize),&
+                   &ens_hfq_u(1:ensemble_size),ens_hfq_v(1:heaada_enssize),ens_min_ps0(1:heaada_enssize),ens_min_ps,&
+                   & Atm_var_g, Atmos_obs,isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo, ni, nj, nk, &
+                   &  T_grid, Atm_time,atm_step,isd, ied, jsd,jed) !no akbk
+
+
+                     do j_ll = jsc_flth,jec_flth
+                     do i_ll = isc_flth,iec_flth
+
+!                        if(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG .le. 80) then
+!                        !hudu to du
+
+                        if(Atm_var_g%y(i_ll,j_ll) .le. 80) then
+                          corr_ps_min(i_ll,j_ll) = (ens_min_ps%data(i_ll,j_ll,1)-corr_ps_min(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        else
+                         corr_ps_min(i_ll,j_ll) = (ens_min_ps%data(i_ll,j_ll,1)-corr_ps_min(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)*&
+                                                & cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        endif
+
+                        corr_ps_mino(i_ll,j_ll) = corr_ps_min(i_ll,j_ll)
+
+                    enddo
+                    enddo
+
+                endif !hea_min
+
+
+                if(hea_hfq_1) then
+write(*,*) 'running hea_hfq_1 ada_driver'
+
+                     do j_t = jsd,jed
+                     do i_t = isd,ied
+                         corr_ps_hfq(i_t,j_t) = Atm_var_g%ps(i_t,j_t)
+                         ens_hfq_ps%data(i_t,j_t,1) = Atm_var_g%ps(i_t,j_t)
+                     enddo
+                     enddo
+
+                    call ensemble_filter_atm_hfq(grid,ens_hfq_t(1:heaada_enssize),ens_hfq_q(1:heaada_enssize),&
+                     & ens_hfq_u(1:ensemble_size),ens_hfq_v(1:heaada_enssize),ens_hfq_ps0(1:heaada_enssize),ens_hfq_ps,&
+                     & Atm_var_g, Atmos_obs, isc_flth, iec_flth, jsc_flth,jec_flth,filter_halo, ni, nj, nk, &
+                     &  T_grid, Atm_time,atm_step, & 
+                     & isd, ied, jsd, jed) !no akbk
+
+
+                     do j_ll = jsc_flth,jec_flth
+                     do i_ll = isc_flth,iec_flth
+
+!                        if(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG .le. 80) then !hudu to du
+
+                        if(Atm_var_g%y(i_ll,j_ll) .le. 80) then
+                          corr_ps_hfq(i_ll,j_ll) = (ens_hfq_ps%data(i_ll,j_ll,1) -corr_ps_hfq(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        else
+                        corr_ps_hfq(i_ll,j_ll) = (ens_hfq_ps%data(i_ll,j_ll,1) -corr_ps_hfq(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        endif
+                        
+                        corr_ps_hfqo(i_ll,j_ll) = corr_ps_hfq(i_ll,j_ll)
+
+                    enddo
+                    enddo
+
+
+             endif !hea_hfq
+         endif
+         endif 
+
+
+        if(hea_mon) then
+write(*,*) 'running 5day ada_driver'
+
+
+                     do j_t = jsd,jed
+                     do i_t = isd,ied
+                         corr_ps_5day(i_t,j_t) = Atm_var_g%ps(i_t,j_t)
+                         ens_5day_ps%data(i_t,j_t,1) = Atm_var_g%ps(i_t,j_t)
+                     enddo
+                     enddo
+                   call ensemble_filter_atm_5day(grid,ens_hfq_t(1:heaada_enssize),ens_hfq_q(1:heaada_enssize),&
+                   & ens_hfq_u(1:ensemble_size),ens_hfq_v(1:heaada_enssize),ens_3h_ps0(1:heaada_enssize),ens_3h_ps,&
+                   & Atm_var_g,Atmos_obs,isc_flth,iec_flth,jsc_flth,jec_flth,filter_halo, ni, nj, nk, &
+                   &  T_grid, Atm_time,atm_step,isd, ied, jsd,jed) !no akbk
+
+                     do j_ll = jsc_flth,jec_flth
+                     do i_ll = isc_flth,iec_flth
+                        if(Atm_var_g%y(i_ll,j_ll) .le. 80) then
+                     corr_ps_5day(i_ll,j_ll) =  (ens_5day_ps%data(i_ll,j_ll,1)-corr_ps_5day(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        else
+                     corr_ps_5day(i_ll,j_ll) = (ens_5day_ps%data(i_ll,j_ll,1)-corr_ps_5day(i_ll,j_ll))*cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)*&
+                                                & cos(Atm_var_g%y(i_ll,j_ll)*RAD_TO_DEG)
+                        endif
+                        corr_psfc5day(i_ll,j_ll) = corr_ps_5day(i_ll,j_ll)
+                     enddo
+                     enddo
+                endif 
+
+
+
+  end subroutine fv_ada  
+
+
+
+        subroutine mk_ens_hf_ada(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+! one mins intv
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+         integer  :: n, m,taup1, i, i_a, i_b,jj,ii  !lulv        
+
+
+       if(it_step <= heaada_enssize) then
+      
+               do jj = jsd,jed
+               do ii = isd,ied
+                 ps_ens_tau(it_step)%data(:,:,1) = atmos_var%ps(:,:)
+                enddo
+                enddo
+          else
+
+           do m = 1, heaada_enssize-1
+               do jj = jsd,jed
+               do ii = isd,ied
+                  ps_ens_tau(m)%data(ii,jj,1)=ps_ens_tau(m+1)%data(ii,jj,1) 
+                enddo
+                enddo
+          end do
+
+                do jj = jsd,jed
+                do ii = isd,ied
+                   ps_ens_tau(heaada_enssize)%data(ii,jj,1) = atmos_var%ps(ii,jj)
+                enddo
+                enddo
+       endif
+        end subroutine mk_ens_hf_ada
+
+
+        subroutine mk_ens_hf_ada_min(atmos_var, ps_ens_tau,it_step,isd,ied,jsd, jed)
+
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens
+         integer,  save ::  i_ensb = 0
+         real ::  intv,real_heaada_enssize
+        
+         time_min_ens=heahfq_minintv*heaada_enssize
+         real_heaada_enssize = REAL(heaada_enssize)
+
+         i_a = mod(it_step,heahfq_minintv)
+         if(i_a==0) i_a=heahfq_minintv
+
+        if (it_step <= time_min_ens ) then !it_step<=400 mint
+               do jj = jsd,jed
+               do ii = isd,ied
+                ps_ens_tmp(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+         if (i_a ==heahfq_minintv) then
+           i_ensb = i_ensb + 1
+           do m=1,heahfq_minintv
+
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tau(i_ensb)%data(ii,jj,1) = ps_ens_tau(i_ensb)%data(ii,jj,1) &
+                                                + ps_ens_tmp(m)%data(ii,jj,1)*1./real_heaada_enssize
+            enddo
+            enddo
+           enddo
+         endif !i_a <= heahfq_minintv
+         endif 
+
+ 
+        if (it_step > time_min_ens ) then
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                ps_ens_tmp(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+ 
+        if( i_a == heahfq_minintv ) then      
+
+               do m =1 , heaada_enssize-1
+               do jj = jsd,jed
+               do ii = isd,ied
+                  ps_ens_tau(m)%data(ii,jj,1) = ps_ens_tau(m+1)%data(ii,jj,1)
+               enddo
+               enddo
+               enddo
+  
+         ps_ens_tau(heaada_enssize)%data(:,:,1) = 0.0
+           do m=1,heahfq_minintv
+           do jj = jsd,jed
+           do ii = isd,ied
+           ps_ens_tau(heaada_enssize)%data(ii,jj,1) = ps_ens_tau(heaada_enssize)%data(ii,jj,1) &
+                                        + ps_ens_tmp(m)%data(ii,jj,1)*1./real_heaada_enssize
+           enddo
+           enddo
+           enddo 
+
+         endif !i_a == heahfq_minintv
+        endif !it_step >= time_min_ens
+
+! write(*,*) 'check_i_ensb',it_step,i_a,i_ensb
+
+        end subroutine mk_ens_hf_ada_min
+
+
+!      subroutine mk_ens_hf_ada_day(atmos_var, ps_ens_tau,it_step,isd,ied,jsd,jed)
+   subroutine mk_ens_hf_ada_day(atmos_var,ps_ens_tau,it_step,isd,ied,jsd,jed)
+
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_day
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_day = 0
+         real ::  intv,real_heaada_enssize
+        integer, parameter :: ensemble_min_day=1440
+
+         time_min_ens=ensemble_min_day*heaada_enssize !1440*20
+        real_heaada_enssize = REAL(heaada_enssize) !20
+
+         i_a = mod(it_step,60)
+         i_day = mod(it_step,1440)
+
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+    write(*,*) 'ensemble_min_day,time_min_ens',ensemble_min_day,time_min_ens
+    write(*,*) 'it_step,i_a,ps_ens_tmp_min',it_step,i_a,ps_ens_tmp_min(i_a)%data(isd+10,jsd+10,1)
+
+       if (it_step <= time_min_ens ) then !1440*20day
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) =ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+     write(*,*) 'i_ensb,ps_ens_tmp_hour',i_ensb,ps_ens_tmp_hour(i_ensb)%data(isd+10,jsd+10,1)
+
+            if (i_ensb ==24) i_ensb=0
+         endif !i_a <= heahfq_minintv
+
+
+        if (i_day==0) then
+          i_ensb_day=i_ensb_day+1 !1~20 day
+          write(*,*) 'it_step,i_a,i_day,i_ensb_day',it_step,i_a,i_day,i_ensb_day
+          ps_ens_tau(i_ensb_day)%data(:,:,1) =0.
+
+            do m=1,24
+            do jj = jsd,jed
+            do ii = isd,ied
+                ps_ens_tau(i_ensb_day)%data(ii,jj,1) = ps_ens_tau(i_ensb_day)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(m)%data(ii,jj,1)*1./24.
+            enddo
+            enddo
+            enddo
+
+      write(*,*) 'it_step,i_ensb_day,ps_ens_tau',it_step,i_ensb_day,ps_ens_tau(i_ensb_day)%data(isd+10,jsd+10,1)
+
+        endif
+       endif
+
+      if (it_step > time_min_ens ) then
+       if(i_ensb==24) i_ensb=0
+
+        if( i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+     write(*,*) 'i_a,i_day,i_ensb',it_step,i_a,i_day,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) = ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                                + ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo !m
+
+             if (i_ensb ==24) i_ensb=0
+         endif ! ia==60
+
+
+       if( i_day == 0 ) then
+       write(*,*) 'i_a,i_day',it_step,i_a,i_day
+           do m = 1, heaada_enssize-1
+               do jj = jsd,jed
+               do ii = isd,ied
+                  ps_ens_tau(m)%data(ii,jj,1)=ps_ens_tau(m+1)%data(ii,jj,1)
+                enddo
+                enddo
+          end do
+
+          ps_ens_tau(heaada_enssize)%data(:,:,1) =0.
+
+            do m=1,24
+            do jj = jsd,jed
+            do ii = isd,ied
+        ps_ens_tau(heaada_enssize)%data(ii,jj,1) = ps_ens_tau(heaada_enssize)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(m)%data(ii,jj,1)*1./24.
+            enddo
+            enddo
+            enddo
+
+       endif !i_day==0
+      endif !it_step >= time_min_ens
+
+      write(*,*) 'ps_ens_tau20',ps_ens_tau(heaada_enssize)%data(isd+10,jsd+10,1)
+
+      end subroutine mk_ens_hf_ada_day
+
+        subroutine  get_a_to_b(ps_ens_tau,ens_hfq_pso01,ens_hfq_pso02,ens_hfq_pso03,&
+                        ens_hfq_pso04,ens_hfq_pso05,ens_hfq_pso06,ens_hfq_pso07,ens_hfq_pso08,&
+                        ens_hfq_pso09,ens_hfq_pso10,ens_hfq_pso11,ens_hfq_pso12,&
+                        ens_hfq_pso13,ens_hfq_pso14,ens_hfq_pso15,ens_hfq_pso16,ens_hfq_pso17,&
+                        ens_hfq_pso18,ens_hfq_pso19,ens_hfq_pso20,&
+!                        isc_flth,iec_flth, jsc_flth, jec_flth)
+                        isd,ied,jsd, jed)
+!        integer, intent(in)  :: isc_flth, iec_flth, jsc_flth, jec_flth
+
+          integer, intent(in)  :: isd,ied,jsd, jed
+         type(ada_field_type), intent(in) :: ps_ens_tau(:)
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso01,ens_hfq_pso02
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso03,ens_hfq_pso04
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso05,ens_hfq_pso06
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso07,ens_hfq_pso08
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso09,ens_hfq_pso10
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso11,ens_hfq_pso12
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso13,ens_hfq_pso14
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso15,ens_hfq_pso16
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso17,ens_hfq_pso18
+   real, dimension(:,:), allocatable, intent(inout) :: ens_hfq_pso19,ens_hfq_pso20
+   integer :: i,j
+
+
+  write(*,*) 'get_a_to_b1',ps_ens_tau(1)%data(isd+10,jsd+10,1)
+   do j= jsd, jed
+   do i= isd,ied
+        ens_hfq_pso01(i,j) = ps_ens_tau(1)%data(i,j,1)
+        ens_hfq_pso02(i,j) = ps_ens_tau(2)%data(i,j,1)
+        ens_hfq_pso03(i,j) = ps_ens_tau(3)%data(i,j,1)
+        ens_hfq_pso04(i,j) = ps_ens_tau(4)%data(i,j,1)
+        ens_hfq_pso05(i,j) = ps_ens_tau(5)%data(i,j,1)
+        ens_hfq_pso06(i,j) = ps_ens_tau(6)%data(i,j,1)
+        ens_hfq_pso07(i,j) = ps_ens_tau(7)%data(i,j,1)
+        ens_hfq_pso08(i,j) = ps_ens_tau(8)%data(i,j,1)
+        ens_hfq_pso09(i,j) = ps_ens_tau(9)%data(i,j,1)
+        ens_hfq_pso10(i,j) = ps_ens_tau(10)%data(i,j,1)
+        ens_hfq_pso11(i,j) = ps_ens_tau(11)%data(i,j,1)
+        ens_hfq_pso12(i,j) = ps_ens_tau(12)%data(i,j,1)
+        ens_hfq_pso13(i,j) = ps_ens_tau(13)%data(i,j,1)
+        ens_hfq_pso14(i,j) = ps_ens_tau(14)%data(i,j,1)
+        ens_hfq_pso15(i,j) = ps_ens_tau(15)%data(i,j,1)
+        ens_hfq_pso16(i,j) = ps_ens_tau(16)%data(i,j,1)
+        ens_hfq_pso17(i,j) = ps_ens_tau(17)%data(i,j,1)
+        ens_hfq_pso18(i,j) = ps_ens_tau(18)%data(i,j,1)
+        ens_hfq_pso19(i,j) = ps_ens_tau(19)%data(i,j,1)
+        ens_hfq_pso20(i,j) = ps_ens_tau(20)%data(i,j,1)
+   enddo
+   enddo
+   write(*,*) 'get_a_to_b',ens_hfq_pso20(isd+10,jsd+10)
+
+
+      end subroutine get_a_to_b
+
+      subroutine read_data_1h(grid,ens_1h_ps0,isd,ied, jsd, jed )
+              TYPE ( domain ), INTENT(INOUT) :: grid
+              type(ada_field_type), intent(inout) :: ens_1h_ps0(:)
+              integer, intent(in)  :: isd,ied, jsd, jed
+              integer :: i,j
+   do j=jsd,jed
+   do i=isd,ied
+
+       ens_1h_ps0(1)%data(i,j,1)   =  grid%ens1h01(i,j)
+       ens_1h_ps0(2)%data(i,j,1)   =  grid%ens1h02(i,j)
+       ens_1h_ps0(3)%data(i,j,1)   =  grid%ens1h03(i,j)
+       ens_1h_ps0(4)%data(i,j,1)   =  grid%ens1h04(i,j)
+       ens_1h_ps0(5)%data(i,j,1)   =  grid%ens1h05(i,j)
+       ens_1h_ps0(6)%data(i,j,1)   =  grid%ens1h06(i,j)
+       ens_1h_ps0(7)%data(i,j,1)   =  grid%ens1h07(i,j)
+       ens_1h_ps0(8)%data(i,j,1)   =  grid%ens1h08(i,j)
+       ens_1h_ps0(9)%data(i,j,1)   =  grid%ens1h09(i,j)
+       ens_1h_ps0(10)%data(i,j,1)  =  grid%ens1h10(i,j)
+       ens_1h_ps0(11)%data(i,j,1)  =  grid%ens1h11(i,j)
+       ens_1h_ps0(12)%data(i,j,1)  =  grid%ens1h12(i,j)
+       ens_1h_ps0(13)%data(i,j,1)  =  grid%ens1h13(i,j)
+       ens_1h_ps0(14)%data(i,j,1)  =  grid%ens1h14(i,j)
+       ens_1h_ps0(15)%data(i,j,1)  =  grid%ens1h15(i,j)
+       ens_1h_ps0(16)%data(i,j,1)  =  grid%ens1h16(i,j)
+       ens_1h_ps0(17)%data(i,j,1)  =  grid%ens1h17(i,j)
+       ens_1h_ps0(18)%data(i,j,1)  =  grid%ens1h18(i,j)
+       ens_1h_ps0(19)%data(i,j,1)  =  grid%ens1h19(i,j)
+       ens_1h_ps0(20)%data(i,j,1)  =  grid%ens1h20(i,j)
+
+   enddo
+   enddo
+
+      end subroutine read_data_1h
+
+      subroutine read_data_3h(grid,ens_3h_ps0,isd,ied, jsd, jed )
+              TYPE ( domain ), INTENT(INOUT) :: grid
+              type(ada_field_type), intent(inout) :: ens_3h_ps0(:)
+              integer, intent(in)  :: isd,ied, jsd, jed
+              integer :: i,j
+   do j=jsd,jed
+   do i=isd,ied
+       ens_3h_ps0(1)%data(i,j,1)   =  grid%ens3h01(i,j)
+       ens_3h_ps0(2)%data(i,j,1)   =  grid%ens3h02(i,j)
+       ens_3h_ps0(3)%data(i,j,1)   =  grid%ens3h03(i,j)
+       ens_3h_ps0(4)%data(i,j,1)   =  grid%ens3h04(i,j)
+       ens_3h_ps0(5)%data(i,j,1)   =  grid%ens3h05(i,j)
+       ens_3h_ps0(6)%data(i,j,1)   =  grid%ens3h06(i,j)
+       ens_3h_ps0(7)%data(i,j,1)   =  grid%ens3h07(i,j)
+       ens_3h_ps0(8)%data(i,j,1)   =  grid%ens3h08(i,j)
+       ens_3h_ps0(9)%data(i,j,1)   =  grid%ens3h09(i,j)
+       ens_3h_ps0(10)%data(i,j,1)  =  grid%ens3h10(i,j)
+       ens_3h_ps0(11)%data(i,j,1)  =  grid%ens3h11(i,j)
+       ens_3h_ps0(12)%data(i,j,1)  =  grid%ens3h12(i,j)
+       ens_3h_ps0(13)%data(i,j,1)  =  grid%ens3h13(i,j)
+       ens_3h_ps0(14)%data(i,j,1)  =  grid%ens3h14(i,j)
+       ens_3h_ps0(15)%data(i,j,1)  =  grid%ens3h15(i,j)
+       ens_3h_ps0(16)%data(i,j,1)  =  grid%ens3h16(i,j)
+       ens_3h_ps0(17)%data(i,j,1)  =  grid%ens3h17(i,j)
+       ens_3h_ps0(18)%data(i,j,1)  =  grid%ens3h18(i,j)
+       ens_3h_ps0(19)%data(i,j,1)  =  grid%ens3h19(i,j)
+       ens_3h_ps0(20)%data(i,j,1)  =  grid%ens3h20(i,j)
+
+   enddo
+   enddo
+
+  write(*,*) 'get_data_grid1',ens_3h_ps0(1)%data(isd+10,jsd+10,1)
+  write(*,*) 'get_data1_grid20',ens_3h_ps0(20)%data(isd+10,jsd+10,1)
+end   subroutine read_data_3h
+
+
+      subroutine read_data_5day(grid,ens_5day_ps0,isd,ied, jsd, jed )
+              TYPE ( domain ), INTENT(INOUT) :: grid
+              type(ada_field_type), intent(inout) :: ens_5day_ps0(:)
+              integer, intent(in)  :: isd,ied, jsd, jed
+              integer :: i,j
+   do j=jsd,jed
+   do i=isd,ied
+       ens_5day_ps0(1)%data(i,j,1)   =  grid%ens5day1(i,j)
+       ens_5day_ps0(2)%data(i,j,1)   =  grid%ens5day2(i,j)
+       ens_5day_ps0(3)%data(i,j,1)   =  grid%ens5day3(i,j)
+       ens_5day_ps0(4)%data(i,j,1)   =  grid%ens5day4(i,j)
+       ens_5day_ps0(5)%data(i,j,1)   =  grid%ens5day5(i,j)
+       ens_5day_ps0(6)%data(i,j,1)   =  grid%ens5day6(i,j)
+       ens_5day_ps0(7)%data(i,j,1)   =  grid%ens5day7(i,j)
+       ens_5day_ps0(8)%data(i,j,1)   =  grid%ens5day8(i,j)
+       ens_5day_ps0(9)%data(i,j,1)   =  grid%ens5day9(i,j)
+       ens_5day_ps0(10)%data(i,j,1)  =  grid%ens5day10(i,j)
+       ens_5day_ps0(11)%data(i,j,1)  =  grid%ens5day11(i,j)
+       ens_5day_ps0(12)%data(i,j,1)  =  grid%ens5day12(i,j)
+       ens_5day_ps0(13)%data(i,j,1)  =  grid%ens5day13(i,j)
+       ens_5day_ps0(14)%data(i,j,1)  =  grid%ens5day14(i,j)
+       ens_5day_ps0(15)%data(i,j,1)  =  grid%ens5day15(i,j)
+       ens_5day_ps0(16)%data(i,j,1)  =  grid%ens5day16(i,j)
+       ens_5day_ps0(17)%data(i,j,1)  =  grid%ens5day17(i,j)
+       ens_5day_ps0(18)%data(i,j,1)  =  grid%ens5day18(i,j)
+       ens_5day_ps0(19)%data(i,j,1)  =  grid%ens5day19(i,j)
+       ens_5day_ps0(20)%data(i,j,1)  =  grid%ens5day20(i,j)
+
+   enddo
+   enddo
+
+  write(*,*) 'get_data_grid5day1',ens_5day_ps0(1)%data(isd+10,jsd+10,1)
+  write(*,*) 'get_data1_grid5day20',ens_5day_ps0(20)%data(isd+10,jsd+10,1)
+end   subroutine read_data_5day
+
+      subroutine read_data_6h(grid,ens_6h_ps0,isd,ied, jsd, jed )
+              TYPE ( domain ), INTENT(INOUT) :: grid
+              type(ada_field_type), intent(inout) :: ens_6h_ps0(:)
+              integer, intent(in)  :: isd,ied, jsd, jed
+              integer :: i,j
+   do j=jsd,jed
+   do i=isd,ied
+       ens_6h_ps0(1)%data(i,j,1)   =  grid%ens6h01(i,j)
+       ens_6h_ps0(2)%data(i,j,1)   =  grid%ens6h02(i,j)
+       ens_6h_ps0(3)%data(i,j,1)   =  grid%ens6h03(i,j)
+       ens_6h_ps0(4)%data(i,j,1)   =  grid%ens6h04(i,j)
+       ens_6h_ps0(5)%data(i,j,1)   =  grid%ens6h05(i,j)
+       ens_6h_ps0(6)%data(i,j,1)   =  grid%ens6h06(i,j)
+       ens_6h_ps0(7)%data(i,j,1)   =  grid%ens6h07(i,j)
+       ens_6h_ps0(8)%data(i,j,1)   =  grid%ens6h08(i,j)
+       ens_6h_ps0(9)%data(i,j,1)   =  grid%ens6h09(i,j)
+       ens_6h_ps0(10)%data(i,j,1)  =  grid%ens6h10(i,j)
+       ens_6h_ps0(11)%data(i,j,1)  =  grid%ens6h11(i,j)
+       ens_6h_ps0(12)%data(i,j,1)  =  grid%ens6h12(i,j)
+       ens_6h_ps0(13)%data(i,j,1)  =  grid%ens6h13(i,j)
+       ens_6h_ps0(14)%data(i,j,1)  =  grid%ens6h14(i,j)
+       ens_6h_ps0(15)%data(i,j,1)  =  grid%ens6h15(i,j)
+       ens_6h_ps0(16)%data(i,j,1)  =  grid%ens6h16(i,j)
+       ens_6h_ps0(17)%data(i,j,1)  =  grid%ens6h17(i,j)
+       ens_6h_ps0(18)%data(i,j,1)  =  grid%ens6h18(i,j)
+       ens_6h_ps0(19)%data(i,j,1)  =  grid%ens6h19(i,j)
+       ens_6h_ps0(20)%data(i,j,1)  =  grid%ens6h20(i,j)
+
+   enddo
+   enddo
+  write(*,*) 'get_data_grid1',ens_6h_ps0(1)%data(isd+10,jsd+10,1)
+  write(*,*) 'get_data1_grid20',ens_6h_ps0(20)%data(isd+10,jsd+10,1)
+
+      end subroutine read_data_6h
+
+        subroutine read_data_day(grid,ens_day_ps0,isd,ied, jsd, jed )
+              TYPE ( domain ), INTENT(INOUT) :: grid
+              type(ada_field_type), intent(inout) :: ens_day_ps0(:)
+              integer, intent(in)  :: isd,ied, jsd, jed
+              integer :: i,j
+  write(*,*) 'read_data1_grid1',isc_flth+5,jsc_flth+5,grid%ENSDAY1(isd+10,jsd+10)
+  write(*,*) 'read_data1_grid20',isc_flth+5,jsc_flth+5,grid%ENSDAY20(isd+10,jsd+10)
+  write(*,*) 'size_grid',size(grid%ENSDAY1,dim=1),size(grid%ENSDAY1,dim=2)
+  write(*,*) 'size_day',size(ens_day_ps0(1)%data,dim=1),size(ens_day_ps0(1)%data,dim=2)
+   do j=jsd,jed
+   do i=isd,ied
+       ens_day_ps0(1)%data(i,j,1)   =  grid%ENSDAY1(i,j)
+       ens_day_ps0(2)%data(i,j,1)   =  grid%ENSDAY2(i,j)
+       ens_day_ps0(3)%data(i,j,1)   =  grid%ENSDAY3(i,j)
+       ens_day_ps0(4)%data(i,j,1)   =  grid%ENSDAY4(i,j)
+       ens_day_ps0(5)%data(i,j,1)   =  grid%ENSDAY5(i,j)
+       ens_day_ps0(6)%data(i,j,1)   =  grid%ENSDAY6(i,j)
+       ens_day_ps0(7)%data(i,j,1)   =  grid%ENSDAY7(i,j)
+       ens_day_ps0(8)%data(i,j,1)   =  grid%ENSDAY8(i,j)
+       ens_day_ps0(9)%data(i,j,1)   =  grid%ENSDAY9(i,j)
+       ens_day_ps0(10)%data(i,j,1)  =  grid%ENSDAY10(i,j)
+       ens_day_ps0(11)%data(i,j,1)  =  grid%ENSDAY11(i,j)
+       ens_day_ps0(12)%data(i,j,1)  =  grid%ENSDAY12(i,j)
+       ens_day_ps0(13)%data(i,j,1)  =  grid%ENSDAY13(i,j)
+       ens_day_ps0(14)%data(i,j,1)  =  grid%ENSDAY14(i,j)
+       ens_day_ps0(15)%data(i,j,1)  =  grid%ENSDAY15(i,j)
+       ens_day_ps0(16)%data(i,j,1)  =  grid%ENSDAY16(i,j)
+       ens_day_ps0(17)%data(i,j,1)  =  grid%ENSDAY17(i,j)
+       ens_day_ps0(18)%data(i,j,1)  =  grid%ENSDAY18(i,j)
+       ens_day_ps0(19)%data(i,j,1)  =  grid%ENSDAY19(i,j)
+       ens_day_ps0(20)%data(i,j,1)  =  grid%ENSDAY20(i,j)
+
+   enddo
+   enddo
+  write(*,*) 'get_data_grid1',ens_day_ps0(1)%data(isd+10,jsd+10,1)
+  write(*,*) 'get_data1_grid20',ens_day_ps0(20)%data(isd+10,jsd+10,1)
+        end subroutine read_data_day
+
+
+   subroutine mk_ens_hf_ada_day2(config_flags,atmos_var,ps_ens_tau,it_step,isd,ied,jsd,jed)
+         TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_day
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_day = 0
+         real ::  intv,real_heaada_enssize
+        integer, parameter :: ensemble_min_day=1440
+
+         time_min_ens=ensemble_min_day*heaada_enssize !1440*20
+        real_heaada_enssize = REAL(heaada_enssize) !20
+
+         i_a = mod(it_step,60)
+         i_day = mod(it_step,1440)
+         if(i_a==0) i_a=60
+
+!         if(it_step == 28802) ps_ens_tmp_min(1)%data(:,:,1) = atmos_var%ps(:,:)
+
+     write(*,*) 'ensemble_min_day,time_min_ens',ensemble_min_day,time_min_ens,ps_ens_tmp_min(1)%data(isd+10,jsd+10,1)
+     write(*,*) 'it_step,i_a,ps_ens_tmp_min',it_step,i_a,ps_ens_tmp_min(i_a)%data(isd+10,jsd+10,1)
+
+           
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) =ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+     write(*,*) 'i_ensb,ps_ens_tmp_hour',i_ensb,ps_ens_tmp_hour(i_ensb)%data(isd+10,jsd+10,1)
+
+            if (i_ensb ==24) i_ensb=0
+         endif !i_a <= heahfq_minintv
+
+        if (i_day==0) then
+!          i_ensb_day=i_ensb_day+1 !1~20 day
+          write(*,*) 'it_step,i_a,i_day',it_step,i_a,i_day
+           do m = 1, heaada_enssize-1
+               do jj = jsd,jed
+               do ii = isd,ied
+                  ps_ens_tau(m)%data(ii,jj,1)=ps_ens_tau(m+1)%data(ii,jj,1)
+                enddo
+                enddo
+          end do
+
+          ps_ens_tau(heaada_enssize)%data(:,:,1) =0.
+
+            do m=1,24
+            do jj = jsd,jed
+            do ii = isd,ied
+                ps_ens_tau(heaada_enssize)%data(ii,jj,1) = ps_ens_tau(heaada_enssize)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(m)%data(ii,jj,1)*1./24.
+            enddo
+            enddo
+            enddo
+
+      write(*,*) 'it_step,i_ensb_day,ps_ens_tau',it_step,i_ensb_day,ps_ens_tau(heaada_enssize)%data(isd+10,jsd+10,1)
+
+        endif
+
+
+      write(*,*) 'ps_ens_tau20',ps_ens_tau(heaada_enssize)%data(isd+10,jsd+10,1)
+      end subroutine mk_ens_hf_ada_day2
+
+
+subroutine mk_ens_ada_6h(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_6h
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_6h = 0
+         real ::  intv,real_heaada_enssize
+
+        time_min_ens=360  !6h*60min
+         i_a = mod(it_step,60)
+         i_6h = mod(it_step,360)
+
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+    write(*,*) 'it_step,i_a,ps_ens_6h_min',it_step,i_a,ps_ens_tmp_min(i_a)%data(isd+10,jsd+10,1)
+
+       if (it_step <= 7200 ) then !7200=20*360
+
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.        
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) =ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+     write(*,*) 'i_ensb,ps_ens_tmp_hour',i_ensb,ps_ens_tmp_hour(i_ensb)%data(isd+10,jsd+10,1)
+
+            if (i_ensb ==6) i_ensb=0
+         endif !i_a <= heahfq_minintv
+
+        if (i_6h==0) then
+         i_ensb_6h=i_ensb_6h+1 !1~20 day
+         ps_ens_tau(i_ensb_6h)%data(:,:,1) =0.
+            do m=1,6
+            do jj = jsd,jed
+            do ii = isd,ied
+                ps_ens_tau(i_ensb_6h)%data(ii,jj,1) = ps_ens_tau(i_ensb_6h)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(m)%data(ii,jj,1)*1./6.
+            enddo
+            enddo
+            enddo
+
+      write(*,*) 'it_step,i_ensb_6h,ps_ens_tau',it_step,i_ensb_6h,ps_ens_tau(i_ensb_6h)%data(isd+10,jsd+10,1)
+        endif
+       endif
+
+end subroutine mk_ens_ada_6h
+
+
+subroutine mk_ens_ada_1h(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_1h
+         integer,  save ::  i_ensb = 0
+         real ::  intv,real_heaada_enssize
+
+         time_min_ens=60  !3h*60min
+         i_a = mod(it_step,60)
+         i_1h = mod(it_step,60)
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+    write(*,*) 'it_step,i_a,ps_ens_1h_min',it_step,i_a,ps_ens_tmp_min(i_a)%data(isd+10,jsd+10,1)
+
+       if (it_step <= 1200 ) then !1200=20*1*60
+
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tau(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tau(i_ensb)%data(ii,jj,1) = ps_ens_tau(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+ write(*,*) 'it_step,i_ensb_1h,ps_ens_tau',it_step,i_ensb,ps_ens_tau(i_ensb)%data(isd+10,jsd+10,1)
+    endif
+    endif
+
+end subroutine mk_ens_ada_1h
+
+
+ subroutine mk_ens_ada_5day2(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_day
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_day = 0
+         real ::  intv,real_heaada_enssize
+        integer, parameter :: ensemble_min_day=1440
+         time_min_ens=ensemble_min_day*heaada_enssize !1440*20
+        real_heaada_enssize = REAL(heaada_enssize) !20
+
+         i_a = mod(it_step,60)
+         i_day = mod(it_step,1440)
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) = ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+     write(*,*)  'i_ensb,ps_ens_tmp_hour',i_ensb,ps_ens_tmp_hour(i_ensb)%data(isd+10,jsd+10,1)
+
+            if (i_ensb ==24) i_ensb=0
+         endif !i_a <= heahfq_minintv
+
+
+
+ end subroutine  mk_ens_ada_5day2
+
+subroutine mk_ens_ada_1h2(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_3h
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_3h = 0
+         real ::  intv,real_heaada_enssize
+
+         i_a  = mod(it_step,60)
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+        if (i_a == 60 ) then
+          write(*,*) 'it_step,i_a',it_step,i_a
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(20)%data(ii,jj,1) = ps_ens_tmp_hour(20)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+           do m = 1, heaada_enssize-1
+               do jj = jsd,jed
+               do ii = isd,ied
+                  ps_ens_tau(m)%data(ii,jj,1)=ps_ens_tau(m+1)%data(ii,jj,1)
+                enddo
+                enddo
+           end do
+
+
+          ps_ens_tau(heaada_enssize)%data(:,:,1) =0.
+
+            do jj = jsd,jed
+            do ii = isd,ied
+                ps_ens_tau(heaada_enssize)%data(ii,jj,1) = ps_ens_tau(heaada_enssize)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(20)%data(ii,jj,1)
+            enddo
+            enddo
+       write(*,*) 'it_step,ps_ens_tau',it_step,ps_ens_tau(20)%data(isd+10,jsd+10,1)
+        endif
+
+end subroutine mk_ens_ada_1h2
+
+subroutine mk_ens_ada_3h(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_3h
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_3h = 0
+         real ::  intv,real_heaada_enssize
+
+         time_min_ens=180  !3h*60min
+         i_a = mod(it_step,60)
+         i_3h = mod(it_step,180)
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+    write(*,*) 'it_step,i_a,ps_ens_3h_min',it_step,i_a,ps_ens_tmp_min(i_a)%data(isd+10,jsd+10,1)
+
+       if (it_step <= 3600 ) then !7200=20*3*60
+
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) = ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+     write(*,*) 'i_ensb,ps_ens_tmp_hour',i_ensb,ps_ens_tmp_hour(i_ensb)%data(isd+10,jsd+10,1)
+
+            if (i_ensb ==3) i_ensb=0
+         endif !i_a <= heahfq_minint
+        if (i_3h==0) then
+         i_ensb_3h=i_ensb_3h+1 !1~20 day
+         ps_ens_tau(i_ensb_3h)%data(:,:,1) =0.
+            do m=1,3
+            do jj = jsd,jed
+            do ii = isd,ied
+                ps_ens_tau(i_ensb_3h)%data(ii,jj,1) = ps_ens_tau(i_ensb_3h)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(m)%data(ii,jj,1)*1./3.
+            enddo
+            enddo
+            enddo
+
+         write(*,*) 'it_step,i_ensb_3h,ps_ens_tau',it_step,i_ensb_3h,ps_ens_tau(i_ensb_3h)%data(isd+10,jsd+10,1)
+        endif
+       endif
+
+end subroutine mk_ens_ada_3h
+
+
+
+
+subroutine mk_ens_ada_3h2(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_3h
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_3h = 0
+         real ::  intv,real_heaada_enssize
+
+         i_a  = mod(it_step,60)
+         i_3h = mod(it_step,180)
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) = ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+            write(*,*)  'i_ensb,ps_ens_tmp_hour',i_ensb,ps_ens_tmp_hour(i_ensb)%data(isd+10,jsd+10,1)
+
+            if (i_ensb ==3) i_ensb=0
+         endif !i_a <= heahfq_minintv
+
+
+        if (i_3h==0) then
+
+          write(*,*) 'it_step,i_a,i_3h',it_step,i_a,i_3h
+           do m = 1, heaada_enssize-1
+               do jj = jsd,jed
+               do ii = isd,ied
+                  ps_ens_tau(m)%data(ii,jj,1)=ps_ens_tau(m+1)%data(ii,jj,1)
+                enddo
+                enddo
+           end do
+
+          ps_ens_tau(heaada_enssize)%data(:,:,1) =0.
+
+            do m=1,3
+            do jj = jsd,jed
+            do ii = isd,ied
+                ps_ens_tau(heaada_enssize)%data(ii,jj,1) = ps_ens_tau(heaada_enssize)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(m)%data(ii,jj,1)*1./3.
+            enddo
+            enddo
+            enddo
+           write(*,*) 'it_step,i_ensb_3h,ps_ens_tau',it_step,i_ensb_3h,ps_ens_tau(20)%data(isd+10,jsd+10,1)
+        endif
+
+end subroutine mk_ens_ada_3h2
+
+
+subroutine mk_ens_ada_6h2(atmos_var, ps_ens_tau,it_step,isd,ied, jsd, jed)
+         type(assim_data_type), intent(in) :: atmos_var
+         type(ada_field_type), intent(inout) :: ps_ens_tau(:)
+         integer, intent(in)  :: it_step,isd,ied, jsd, jed
+!         integer,intent(in) :: ensemble_min_day
+         integer  :: n, m,taup1, i, i_a, i_b,ii,jj,time_min_ens,i_6h
+         integer,  save ::  i_ensb = 0
+         integer,  save ::  i_ensb_6h = 0
+         real ::  intv,real_heaada_enssize
+
+         time_min_ens=360  !6h*60min
+         i_a = mod(it_step,60)
+         i_6h = mod(it_step,360)
+         if(i_a==0) i_a=60
+
+               do jj = jsd,jed
+               do ii = isd,ied
+                    ps_ens_tmp_min(i_a)%data(ii,jj,1)  = atmos_var%ps(ii,jj)
+               enddo
+               enddo
+
+         if (i_a == 60 ) then
+           i_ensb = i_ensb + 1 !1~24 hour
+            write(*,*) 'it_step,i_a,i_ensb',it_step,i_a,i_ensb
+           ps_ens_tmp_hour(i_ensb)%data(:,:,1) =0.
+
+           do m=1,60
+            do jj = jsd,jed
+            do ii = isd,ied
+                 ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) = ps_ens_tmp_hour(i_ensb)%data(ii,jj,1) +&
+                                        ps_ens_tmp_min(m)%data(ii,jj,1)*1./60.
+            enddo
+            enddo
+           enddo
+
+            write(*,*)  'i_ensb,ps_ens_tmp_hour',i_ensb,ps_ens_tmp_hour(i_ensb)%data(isd+10,jsd+10,1)
+
+            if (i_ensb ==6) i_ensb=0
+         endif !i_a <= heahfq_minintv
+
+
+        if (i_6h==0) then
+
+          write(*,*) 'it_step,i_a,i_6h',it_step,i_a,i_6h
+           do m = 1, heaada_enssize-1
+               do jj = jsd,jed
+               do ii = isd,ied
+                  ps_ens_tau(m)%data(ii,jj,1)=ps_ens_tau(m+1)%data(ii,jj,1)
+                enddo
+                enddo
+           end do
+
+          ps_ens_tau(heaada_enssize)%data(:,:,1) =0.
+
+            do m=1,6
+            do jj = jsd,jed
+            do ii = isd,ied
+                ps_ens_tau(heaada_enssize)%data(ii,jj,1) =  ps_ens_tau(heaada_enssize)%data(ii,jj,1) + &
+                                              ps_ens_tmp_hour(m)%data(ii,jj,1)*1./6.
+            enddo
+            enddo
+            enddo
+
+           write(*,*) 'it_step,i_ensb_6h,ps_ens_tau',it_step,i_ensb_6h,ps_ens_tau(20)%data(isd+10,jsd+10,1)
+        endif
+
+end subroutine mk_ens_ada_6h2
+
+end module module_ada_driver_fv_mod

@@ -1,0 +1,38 @@
+{
+  "atm_glob": "/data/assim-f2py-test/work_ctl/output/*/atmos_3hourly.nc",
+  "ocn_glob": "/data/assim-f2py-test/work_ctl/output/*/ocean_3hourly.nc",
+  "output_dir": "/data/cm2_lda/data",
+  "progress_log_dir": "logs",
+  "time_chunk": 1,
+  "parallel_backend": "auto",
+  "preprocess_workers": 1,
+  "cleanup_existing_frames": true,
+  "atm_vars": ["T_SURF", "U_REF", "V_REF", "PS"],
+  "atm_output_vars": ["TEMP", "UCOMP", "VCOMP", "PS"],
+  "ocn_vars": ["SST", "U_SURF", "V_SURF", "ETA_T"],
+  "ocn_output_vars": ["SST", "U_SURF", "V_SURF", "ETA_T"],
+  "var_aliases": {
+    "atm": {
+      "T_SURF": ["T_SURF", "TEMP"],
+      "U_REF": ["U_REF", "UCOMP"],
+      "V_REF": ["V_REF", "VCOMP"],
+      "PS": ["PS"]
+    },
+    "ocn": {
+      "SST": ["SST", "TEMP"],
+      "U_SURF": ["U_SURF", "U"],
+      "V_SURF": ["V_SURF", "V"],
+      "ETA_T": ["ETA_T", "SSH", "SSZ"]
+    }
+  },
+  "vert_select": {
+    "atm::PS": -1,
+    "atm::T_SURF": -1,
+    "atm::U_REF": -1,
+    "atm::V_REF": -1,
+    "ocn::SST": -1,
+    "ocn::U_SURF": -1,
+    "ocn::V_SURF": -1,
+    "ocn::ETA_T": -1
+  }
+}

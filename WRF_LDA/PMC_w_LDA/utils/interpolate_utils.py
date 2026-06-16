@@ -116,7 +116,7 @@ def interpolate(val_field: torch.Tensor, axis: list, coors: list, type: str = 'b
             idx = int(torch.searchsorted(ax0, torch.tensor(x, device=device, dtype=dtype), right=True).item())
             idy = int(torch.searchsorted(ax1, torch.tensor(y, device=device, dtype=dtype), right=True).item())
 
-            print(f"the interpolate indexes are: idx: {idx}, idy: {idy}.")
+            #print(f"the interpolate indexes are: idx: {idx}, idy: {idy}.")
 
             # 边界保护（与 numpy 代码一致）
             if idx == 0 or idy == 0 or idx >= nx or idy >= ny:

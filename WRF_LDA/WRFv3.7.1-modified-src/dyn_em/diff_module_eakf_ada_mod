@@ -1,0 +1,926 @@
+9c9
+< USE module_assim_tools_mod, only : obs_increment_hfq,update_from_obs_inc,obs_increment
+---
+> USE module_assim_tools_mod, only : obs_increment_hfq,update_from_obs_inc,obs_increment,update_from_obs_inc_k
+19c19
+< !public ensemble_filter_atm_3h,ensemble_filter_atm_1h,ensemble_filter_atm_5day
+---
+> public ensemble_filter_atm_6h_r,ensemble_filter_atm_5day_r,ensemble_filter_atm_day_r,ensemble_filter_atm_3h_r
+39a40
+> real, dimension(:), allocatable :: enso_t_r_o
+44c45
+< 
+---
+> real, dimension(:), allocatable :: obs_inc_eakf_tr,obs_inc_eakf_ur,obs_inc_eakf_vr
+85d85
+< 
+86a87,88
+> allocate(enso_t_r_o(hea_e_size))
+> allocate(obs_inc_eakf_tr(hea_e_size))
+112a115,118
+> !
+> enso_t_r_o(:) = 0.
+> obs_inc_eakf_tr(:) = 0.
+> 
+214c220
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false.
+356c362
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false.
+508d513
+< write(*,*) 'npx,  npy,  nk ',npx,npy,nk 
+559c564
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false.
+705c710
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false.
+969c974
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false.
+1015,1016c1020,1021
+< !       write(*,'("cov_factor,ens_in_hfqin",1xi5,1xi3,1xi3,1xi3,1xf6.2,1xf6.2,1xi3,1xi3,1xf16.2,1xf16.2)')&
+< !                     atm_step,myproc,i_o,j_o,obs_loc_ptq%lon,obs_loc_ptq%lat,i_m,j_m,cov_factor,ens_in_hfq(20)
+---
+>       write(*,'("cov_factor,ens_in_hfqin",1xi5,1xi3,1xi3,1xi3,1xf6.2,1xf6.2,1xi3,1xi3,1xf16.2,1xf16.2)')&
+>                     atm_step,myproc,i_o,j_o,obs_loc_ptq%lon,obs_loc_ptq%lat,i_m,j_m,cov_factor,ens_in_hfq(20)
+1144c1149
+<                           if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.        
+---
+>                           if (j_m <= 0 .or. j_m > 409) assim_flag = .false.        
+1395c1400
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false. 
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false. 
+1559c1564
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false.
+1697c1702
+<                         if (j_m <= 0 .or. j_m > npy-1) assim_flag = .false.
+---
+>                         if (j_m <= 0 .or. j_m > 409) assim_flag = .false.
+1812a1818,2674
+> 
+>  subroutine  ensemble_filter_atm_6h_r(grid,config_flags,ens_6h_q0,ens_6h_q,&
+>                    &ens_6h_t0,ens_6h_t,ens_6h_u0,ens_6h_u,&
+>                    &ens_6h_v0,ens_6h_v,ens_6h_ps0,ens_6h_ps,&
+>                    &atm_var, rio,rjo,rko,errf,lat1,lon1,&
+>                    &  T_grid, m_time,atm_step,&
+>                    & isd, ied, jsd, jed,kms, kme,its, ite, jts, jte,kts,kte,&
+>                      ids,  ide,  jds,  jde,  kds,  kde,dx)
+> 
+> 
+>     TYPE ( domain ), INTENT(INOUT) :: grid
+>     TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+>     type(ada_field_type), dimension(:), intent(inout) :: ens_6h_q0,ens_6h_t0,ens_6h_u0,ens_6h_v0,ens_6h_ps0
+>     type(ada_field_type), intent(inout) :: ens_6h_q,ens_6h_t,ens_6h_u,ens_6h_v,ens_6h_ps
+>     type(assim_data_type), intent(in) :: atm_var
+>     integer, intent(in) :: isd, ied, jsd, jed,kms, kme,its, ite, jts,jte, kts, kte
+>     real,intent(in) :: rio,rjo
+>     real,intent(in) :: rko(6),errf(6)
+>     integer, intent(in) :: ids,  ide,  jds,  jde,  kds,  kde
+>     type(ada_grid_type), intent(in) :: T_grid
+>     integer, intent(in)  :: atm_step
+>     type(WRFU_Time), intent(in) :: m_time
+>     real, INTENT(IN)  :: dx,lat1,lon1
+>     integer :: n,nnn,k
+>     integer :: nsndlev,njcsnd
+>     integer nsta,I,J,maxj,minj,maxi,mini,igrid
+>     real  ::  ensem_stn(20,6)
+>     real :: gfactor,rfactor,gridx,gridy,rindx,ris
+>     real :: rj,rx,ri,ry,cov_factor_h,cov_factor,cor_oi,cov_factor_v,cov_factor_t
+>     integer :: kob,kobp,kmin,kmax,ens_size,j_ens
+> 
+>   type(loc_type) :: model_loc,obs_loc_ptq
+>   real :: dist, dist0,coslat
+>   character(len=1) :: VARI
+>   real :: std_oi_o, std_oi_g
+>   integer :: ass_variable = 1
+>   real :: ra(6),rb(6),rc(6)
+> 
+>   nsta = 6
+> 
+>   std_oi_o= 0.0
+>   std_oi_g=0.0
+> 
+>     ens_size = 20
+>   ensem_stn(:,:) = 0.
+> !  write(*,*) 'running ensemble_filter_atm_6h_r'
+> 
+> 
+>     call ensem_stnt(grid,config_flags,ens_6h_t0,ensem_stn,atm_step,rio,rjo,rko,&
+>         & isd, ied, jsd, jed,kms, kme,its, ite,jts, jte, kts,kte,&
+>                 ids,  ide,  jds,  jde,  kds,  kde )
+> 
+>     GRIDX=0.5
+>     GRIDY=0.5
+>     IGRID=1
+> 
+> 
+>   RINDX=config_flags%e_r_6h *1000./dx   ! 37.037
+> 
+> 
+>     DO J=jts,jte
+> 
+> ! return if too close to j boundary
+>         if((j.le.2.or.j.ge.jde-1)) then
+>           return
+>         endif
+> 
+>         MAXJ=J+IFIX(RINDX)
+>         MINJ=J-IFIX(RINDX)
+> 
+>         do n=1,nsta
+>            RA(n)=rio-GRIDX
+>            RB(n)=rjo-GRIDY
+>         enddo
+> 
+>         do n=1,nsta
+>         cov_factor_t = 1.0
+> 
+>          IF( ABS(errf(n)) >= 99.0  .or. ABS(errf(n)) == 0.0   ) THEN
+> 
+>             ELSEIF( RB(N).LT.FLOAT(MINJ) .OR. RB(N).GT.FLOAT(MAXJ) ) THEN
+>  
+>          ELSE
+>            KOB=nint(RKO(N))
+>            KOB=MIN0(kte,KOB)
+>            KOB=MAX0(1,KOB)
+> 
+>         if(   RA(N).GE. ids   .and. RA(N).LE. float(ide)                &
+>         .and. RB(N).GE. jds   .and. RB(N).LE.float(jde) ) then
+> 
+>         MAXI=IFIX(RA(N)+RINDX)  ! xiang 0 qu zheng,dui zheng shu ,ji xiang xia
+> !qu zheng
+>         MAXI=MIN0(ide,MAXI)
+>         MINI=IFIX(RA(N)-RINDX)
+>         MINI=MAX0(1,MINI)
+> 
+>              obs_loc_ptq%lon = lon1
+>           if ( obs_loc_ptq%lon > 360.0 ) obs_loc_ptq%lon  = obs_loc_ptq%lon-360.0
+>              obs_loc_ptq%lat = lat1
+>           if ( abs(obs_loc_ptq%lat) <= 80.0 ) then
+>            coslat = cos(obs_loc_ptq%lat*DEG_TO_RAD)       
+>            else
+>            coslat = cos(80.0*DEG_TO_RAD)
+>           end if
+> 
+> 
+>             if(kob .EQ.1 ) then
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+> 
+>                            model_loc%lon = T_grid%x(i)
+>                            if  ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_6h*coslat
+>                                 cov_factor = 0
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+>                               cor_oi = cov_factor_h
+>                               cov_factor = cov_factor_h* cov_factor_t
+> 
+>                         do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_6h_t0(j_ens)%data(i,kob,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                         enddo
+>                          ens_inc_hfq(:) = 0.0
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,kob,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+>                         ens_6h_t%data(i,kob,j) = ens_6h_t%data(i,kob,j) + ens_inc_hfq(20)
+> 
+>                     ENDDO
+>                 else
+> 
+>                 kmin = IFIX(rko(n))
+>                 kmax = ceiling(rko(n)) !xiang shang qu zheng
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+> 
+> 
+>                            model_loc%lon = T_grid%x(i)
+>                            if ( model_loc%lon > 360.0 ) model_loc%lon =model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_6h*coslat
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+> 
+>                                 cov_factor = 0
+>                         if( kmax<=26 ) then
+>                         do k=kmin,kmax
+>                               cov_factor_v =   1 - abs( (rko(n) - k) )
+>                               cov_factor   =  cov_factor_v * cov_factor_h * cov_factor_t
+> 
+>                           do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_6h_t0(j_ens)%data(i,k,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                           enddo
+>                         ens_inc_hfq(:) = 0.0
+> 
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,k,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+> 
+>                           ens_6h_t%data(i,k,j) = ens_6h_t%data(i,k,j) + ens_inc_hfq(20)
+> 
+> 
+> 
+> !        if( ens_inc_hfq(20) .NE. 0 ) then
+> !        write(*,*) 'ne_inc', ens_6h_t%data(i,k,j),ens_inc_hfq(20),i,k,j,n
+> !        endif
+> 
+>                         enddo !k=kmin,kmax
+>                         endif ! if( kmax<=27 ) 
+>                   ENDDO
+> 
+>                 endif !  if(kob .EQ.1 )
+> 
+> 
+>           endif !ra
+>          ENDIF !IF
+>         enddo !n=1,6
+> 
+> 
+>     ENDDO  !J=jts,jte
+> 
+> 
+> 
+>  end subroutine ensemble_filter_atm_6h_r
+> 
+>  subroutine ensemble_filter_atm_3h_r(grid,config_flags,ens_3h_q0,ens_3h_q,&
+>                    &ens_3h_t0,ens_3h_t,ens_3h_u0,ens_3h_u,&
+>                    &ens_3h_v0,ens_3h_v,ens_3h_ps0,ens_3h_ps,&
+>                    &atm_var, rio,rjo,rko,errf,lat1,lon1,&
+>                    &  T_grid, m_time,atm_step,&
+>                    & isd, ied, jsd, jed,kms, kme,its, ite, jts, jte,kts,kte,&
+>                      ids,  ide,  jds,  jde,  kds,  kde,dx)
+> 
+> 
+>     TYPE ( domain ), INTENT(INOUT) :: grid
+>     TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+>     type(ada_field_type), dimension(:), intent(inout) :: ens_3h_q0,ens_3h_t0,ens_3h_u0,ens_3h_v0,ens_3h_ps0
+>     type(ada_field_type), intent(inout) :: ens_3h_q,ens_3h_t,ens_3h_u,ens_3h_v,ens_3h_ps
+>     type(assim_data_type), intent(in) :: atm_var
+>     integer, intent(in) :: isd, ied, jsd, jed,kms, kme,its, ite, jts,jte, kts,kte
+>     real,intent(in) :: rio,rjo
+>     real,intent(in) :: rko(6),errf(6)
+>     integer, intent(in) :: ids,  ide,  jds,  jde,  kds,  kde
+>     type(ada_grid_type), intent(in) :: T_grid
+>     integer, intent(in)  :: atm_step
+>     type(WRFU_Time), intent(in) :: m_time
+>     real, INTENT(IN)  :: dx,lat1,lon1
+>     integer :: n,nnn,k
+>     integer :: nsndlev,njcsnd
+>     integer nsta,I,J,maxj,minj,maxi,mini,igrid
+>     real  ::  ensem_stn(20,6)
+>     real :: gfactor,rfactor,gridx,gridy,rindx,ris
+>     real :: rj,rx,ri,ry,cov_factor_h,cov_factor,cor_oi,cov_factor_v,cov_factor_t
+>     integer :: kob,kobp,kmin,kmax,ens_size,j_ens
+> 
+> 
+>   type(loc_type) :: model_loc,obs_loc_ptq
+>   real :: dist, dist0,coslat
+>   character(len=1) :: VARI
+>   real :: std_oi_o, std_oi_g
+>   integer :: ass_variable = 1
+>   real :: ra(6),rb(6),rc(6)
+> 
+>   nsta = 6
+> 
+>   std_oi_o= 0.0
+>   std_oi_g=0.0
+> 
+>     ens_size = 20
+>   ensem_stn(:,:) = 0.
+> 
+> 
+>     call ensem_stnt(grid,config_flags,ens_3h_t0,ensem_stn,atm_step,rio,rjo,rko,&
+>         & isd, ied, jsd, jed,kms, kme,its, ite,jts, jte, kts,kte,&
+>                 ids,  ide,  jds,  jde,  kds,  kde )
+> 
+>     GRIDX=0.5
+>     GRIDY=0.5
+>     IGRID=1
+> 
+>   RINDX=config_flags%e_r_3h *1000./dx   ! 37.037
+> 
+> 
+>     DO J=jts,jte
+> 
+> ! return if too close to j boundary
+>         if((j.le.2.or.j.ge.jde-1)) then
+>           return
+>         endif
+> 
+>         MAXJ=J+IFIX(RINDX)
+>         MINJ=J-IFIX(RINDX)
+> 
+>         do n=1,nsta
+>            RA(n)=rio-GRIDX
+>            RB(n)=rjo-GRIDY
+>         enddo
+> 
+> 
+>         do n=1,nsta
+>         cov_factor_t = 1.0
+> 
+>          IF( ABS(errf(n)) >= 99.0  .or. ABS(errf(n)) == 0.0   ) THEN
+> 
+>             ELSEIF( RB(N).LT.FLOAT(MINJ) .OR. RB(N).GT.FLOAT(MAXJ) ) THEN
+> 
+>          ELSE
+> 
+>            KOB=nint(RKO(N))
+>            KOB=MIN0(kte,KOB)
+>            KOB=MAX0(1,KOB)
+> 
+>         if(   RA(N).GE. ids   .and. RA(N).LE. float(ide)                &
+>         .and. RB(N).GE. jds   .and. RB(N).LE.float(jde) ) then
+> 
+>         MAXI=IFIX(RA(N)+RINDX)  ! xiang 0 qu zheng,dui zheng shu ,ji xiang xia
+> !qu zheng
+>         MAXI=MIN0(ide,MAXI)
+>         MINI=IFIX(RA(N)-RINDX)
+>         MINI=MAX0(1,MINI)
+> 
+>              obs_loc_ptq%lon = lon1
+>           if ( obs_loc_ptq%lon > 360.0 ) obs_loc_ptq%lon  = obs_loc_ptq%lon-360.0
+>              obs_loc_ptq%lat = lat1
+>           if ( abs(obs_loc_ptq%lat) <= 80.0 ) then
+>            coslat = cos(obs_loc_ptq%lat*DEG_TO_RAD)
+>            else
+>            coslat = cos(80.0*DEG_TO_RAD)
+>           end if
+> 
+>             if(kob .EQ.1 ) then
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+> 
+>                            model_loc%lon = T_grid%x(i)
+>                            if  ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_3h*coslat
+>                                 cov_factor = 0
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+>                               cor_oi = cov_factor_h
+>                               cov_factor = cov_factor_h* cov_factor_t
+> 
+> 
+>                         do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_3h_t0(j_ens)%data(i,kob,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                         enddo
+>                          ens_inc_hfq(:) = 0.0
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,kob,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+>                         ens_3h_t%data(i,kob,j) = ens_3h_t%data(i,kob,j) + ens_inc_hfq(20)
+>                     ENDDO
+>                 else
+>                 kmin = IFIX(rko(n))
+>                 kmax = ceiling(rko(n)) !xiang shang qu zheng
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+> 
+>                            model_loc%lon = T_grid%x(i)
+>                            if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_3h*coslat
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+> 
+>                                 cov_factor = 0
+>                         if( kmax<=26 ) then
+>                         do k=kmin,kmax
+>                               cov_factor_v =   1 - abs( (rko(n) - k) )
+>                               cov_factor   =  cov_factor_v * cov_factor_h * cov_factor_t
+> 
+>                           do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_3h_t0(j_ens)%data(i,k,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                           enddo
+>                         ens_inc_hfq(:) = 0.0
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,k,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+> 
+>                           ens_3h_t%data(i,k,j) = ens_3h_t%data(i,k,j) + ens_inc_hfq(20)
+> 
+>                         enddo !k=kmin,kmax
+>                         endif ! if( kmax<=27 ) 
+>                   ENDDO
+> 
+>                 endif !  if(kob .EQ.1 )
+> 
+> 
+>           endif !ra
+>          ENDIF !IF
+>         enddo !n=1,6
+> 
+> 
+>     ENDDO  !J=jts,jte
+> 
+>  end subroutine ensemble_filter_atm_3h_r
+> 
+>  subroutine ensemble_filter_atm_day_r(grid,config_flags,ens_day_q0,ens_day_q,&
+>                    &ens_day_t0,ens_day_t,ens_day_u0,ens_day_u,&
+>                    &ens_day_v0,ens_day_v,ens_day_ps0,ens_day_ps,&
+>                    &atm_var, rio,rjo,rko,errf,lat1,lon1,&
+>                    &  T_grid, m_time,atm_step,&
+>                    & isd, ied, jsd, jed,kms, kme,its, ite, jts, jte,kts,kte,&
+>                      ids,  ide,  jds,  jde,  kds,  kde,dx)
+>     TYPE ( domain ), INTENT(INOUT) :: grid
+>     TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+>     type(ada_field_type), dimension(:), intent(inout) :: ens_day_q0,ens_day_t0,ens_day_u0,ens_day_v0,ens_day_ps0
+>     type(ada_field_type), intent(inout) :: ens_day_q,ens_day_t,ens_day_u,ens_day_v,ens_day_ps
+>     type(assim_data_type), intent(in) :: atm_var
+>     integer, intent(in) :: isd, ied, jsd, jed,kms, kme,its, ite, jts,jte,kts,kte
+>     real,intent(in) :: rio,rjo
+>     real,intent(in) :: rko(6),errf(6)
+>     integer, intent(in) :: ids,  ide,  jds,  jde,  kds,  kde
+>     type(ada_grid_type), intent(in) :: T_grid
+>     integer, intent(in)  :: atm_step
+>     type(WRFU_Time), intent(in) :: m_time
+>     real, INTENT(IN)  :: dx,lat1,lon1
+>     integer :: n,nnn,k
+>     integer :: nsndlev,njcsnd
+>     integer nsta,I,J,maxj,minj,maxi,mini,igrid
+>     real  ::  ensem_stn(20,6)
+>     real :: gfactor,rfactor,gridx,gridy,rindx,ris
+>     real :: rj,rx,ri,ry,cov_factor_h,cov_factor,cor_oi,cov_factor_v,cov_factor_t
+>     integer :: kob,kobp,kmin,kmax,ens_size,j_ens
+>   type(loc_type) :: model_loc,obs_loc_ptq
+>   real :: dist, dist0,coslat
+>   character(len=1) :: VARI
+>   real :: std_oi_o, std_oi_g
+>   integer :: ass_variable = 1
+>   real :: ra(6),rb(6),rc(6)
+> 
+>   nsta = 6
+> 
+>   std_oi_o= 0.0
+>   std_oi_g=0.0
+> 
+>     ens_size = 20
+>     ensem_stn(:,:) = 0.
+> 
+>     call ensem_stnt(grid,config_flags,ens_day_t0,ensem_stn,atm_step,rio,rjo,rko,&
+>         & isd, ied, jsd, jed,kms, kme,its, ite,jts, jte, kts,kte,&
+>                 ids,  ide,  jds,  jde,  kds,  kde )
+> 
+>     GRIDX=0.5
+>     GRIDY=0.5
+>     IGRID=1
+> 
+>   RINDX=config_flags%e_r_1day *1000./dx   ! 37.037
+> 
+>     DO J=jts,jte
+> 
+> ! return if too close to j boundary
+>         if((j.le.2.or.j.ge.jde-1)) then
+>           return
+>         endif
+> 
+>         MAXJ=J+IFIX(RINDX)
+>         MINJ=J-IFIX(RINDX)
+> 
+>         do n=1,nsta
+>            RA(n)=rio-GRIDX
+>            RB(n)=rjo-GRIDY
+>         enddo
+> 
+>         do n=1,nsta
+>         cov_factor_t = 1.0
+> 
+>          IF( ABS(errf(n)) >= 99.0  .or. ABS(errf(n)) == 0.0   ) THEN
+> 
+>             ELSEIF( RB(N).LT.FLOAT(MINJ) .OR. RB(N).GT.FLOAT(MAXJ) ) THEN
+> 
+>          ELSE
+> 
+>            KOB=nint(RKO(N))
+>            KOB=MIN0(kte,KOB)
+>            KOB=MAX0(1,KOB)
+> 
+>         if(   RA(N).GE. ids   .and. RA(N).LE. float(ide)                &
+>         .and. RB(N).GE. jds   .and. RB(N).LE.float(jde) ) then
+> 
+>         MAXI=IFIX(RA(N)+RINDX)  ! xiang 0 qu zheng,dui zheng shu ,ji xiang xia
+> !qu zheng
+>         MAXI=MIN0(ide,MAXI)
+>         MINI=IFIX(RA(N)-RINDX)
+>         MINI=MAX0(1,MINI)
+> 
+>              obs_loc_ptq%lon = lon1
+>           if ( obs_loc_ptq%lon > 360.0 ) obs_loc_ptq%lon  = obs_loc_ptq%lon-360.0
+>              obs_loc_ptq%lat = lat1
+>           if ( abs(obs_loc_ptq%lat) <= 80.0 ) then
+>            coslat = cos(obs_loc_ptq%lat*DEG_TO_RAD)
+>            else
+>            coslat = cos(80.0*DEG_TO_RAD)
+>           end if
+> 
+>             if(kob .EQ.1 ) then
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+> 
+>                            model_loc%lon = T_grid%x(i)
+>                            if  ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_5day*coslat
+>                                 cov_factor = 0
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+>                               cor_oi = cov_factor_h
+>                               cov_factor = cov_factor_h* cov_factor_t
+> 
+>                         do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_day_t0(j_ens)%data(i,kob,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                         enddo
+>                          ens_inc_hfq(:) = 0.0
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,kob,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+>                         ens_day_t%data(i,kob,j) = ens_day_t%data(i,kob,j) + ens_inc_hfq(20)
+>                     ENDDO
+> 
+>                 else
+>                 kmin = IFIX(rko(n))
+>                 kmax = ceiling(rko(n)) !xiang shang qu zheng
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+>                            model_loc%lon = T_grid%x(i)
+>                            if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_1day*coslat
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+>                                 cov_factor = 0
+>                         if( kmax<=26 ) then
+>                         do k=kmin,kmax
+>                               cov_factor_v =   1 - abs( (rko(n) - k) )
+>                               cov_factor   =  cov_factor_v * cov_factor_h * cov_factor_t
+> 
+>                           do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_day_t0(j_ens)%data(i,k,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                           enddo
+>                         ens_inc_hfq(:) = 0.0
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,k,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+> 
+>                           ens_day_t%data(i,k,j) = ens_day_t%data(i,k,j) + ens_inc_hfq(20)
+> 
+>                         enddo !k=kmin,kmax
+>                         endif ! if( kmax<=27 ) 
+>                   ENDDO
+> 
+>                 endif !  if(kob .EQ.1 )
+> 
+> 
+>           endif !ra
+>          ENDIF !IF
+>         enddo !n=1,6
+> 
+> 
+>     ENDDO  !J=jts,jte
+> 
+> 
+>  end subroutine ensemble_filter_atm_day_r
+> 
+> 
+>  subroutine ensemble_filter_atm_5day_r(grid,config_flags,ens_5day_q0,ens_5day_q,&
+>                    &ens_5day_t0,ens_5day_t,ens_5day_u0,ens_5day_u,&
+>                    &ens_5day_v0,ens_5day_v,ens_5day_ps0,ens_5day_ps,&
+>                    &atm_var, rio,rjo,rko,errf,lat1,lon1,&
+>                    &  T_grid, m_time,atm_step,&
+>                    & isd, ied, jsd, jed,kms, kme,its, ite, jts, jte,kts,kte,&
+>                      ids,  ide,  jds,  jde,  kds,  kde,dx)
+> 
+>     TYPE ( domain ), INTENT(INOUT) :: grid
+>     TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+>     type(ada_field_type), dimension(:), intent(inout) :: ens_5day_q0,ens_5day_t0,ens_5day_u0,ens_5day_v0,ens_5day_ps0
+>     type(ada_field_type), intent(inout) :: ens_5day_q,ens_5day_t,ens_5day_u,ens_5day_v,ens_5day_ps
+>     type(assim_data_type), intent(in) :: atm_var
+>     integer, intent(in) :: isd, ied, jsd, jed,kms, kme,its, ite, jts,jte,kts,kte
+>     real,intent(in) :: rio,rjo
+>     real,intent(in) :: rko(6),errf(6)
+>     integer, intent(in) :: ids,  ide,  jds,  jde,  kds,  kde
+>     type(ada_grid_type), intent(in) :: T_grid
+>     integer, intent(in)  :: atm_step
+>     type(WRFU_Time), intent(in) :: m_time
+>     real, INTENT(IN)  :: dx,lat1,lon1
+>     integer :: n,nnn,k
+>     integer :: nsndlev,njcsnd
+>     integer nsta,I,J,maxj,minj,maxi,mini,igrid
+>     real  ::  ensem_stn(20,6)
+>     real :: gfactor,rfactor,gridx,gridy,rindx,ris
+>     real :: rj,rx,ri,ry,cov_factor_h,cov_factor,cor_oi,cov_factor_v,cov_factor_t
+>     integer :: kob,kobp,kmin,kmax,ens_size,j_ens
+> 
+>   type(loc_type) :: model_loc,obs_loc_ptq
+>   real :: dist, dist0,coslat
+>   character(len=1) :: VARI
+>   real :: std_oi_o, std_oi_g
+>   integer :: ass_variable = 1
+>   real :: ra(6),rb(6),rc(6)
+> 
+>   nsta = 6
+> 
+>   std_oi_o= 0.0
+>   std_oi_g=0.0
+> 
+>     ens_size = 20
+>     ensem_stn(:,:) = 0.
+> 
+>     call ensem_stnt(grid,config_flags,ens_5day_t0,ensem_stn,atm_step,rio,rjo,rko,&
+>         & isd, ied, jsd, jed,kms, kme,its, ite,jts, jte, kts,kte,&
+>                 ids,  ide,  jds,  jde,  kds,  kde )
+> 
+>     GRIDX=0.5
+>     GRIDY=0.5
+>     IGRID=1
+> 
+>   RINDX=config_flags%e_r_5day *1000./dx   ! 37.037
+> 
+>     DO J=jts,jte
+> 
+> ! return if too close to j boundary
+>         if((j.le.2.or.j.ge.jde-1)) then
+>           return
+>         endif
+> 
+>         MAXJ=J+IFIX(RINDX)
+>         MINJ=J-IFIX(RINDX)
+> 
+>         do n=1,nsta
+>            RA(n)=rio-GRIDX
+>            RB(n)=rjo-GRIDY
+>         enddo
+> 
+>         do n=1,nsta
+>         cov_factor_t = 1.0
+> 
+>          IF( ABS(errf(n)) >= 99.0  .or. ABS(errf(n)) == 0.0   ) THEN
+> 
+>             ELSEIF( RB(N).LT.FLOAT(MINJ) .OR. RB(N).GT.FLOAT(MAXJ) ) THEN
+> 
+>          ELSE
+>            KOB=nint(RKO(N))
+>            KOB=MIN0(kte,KOB)
+>            KOB=MAX0(1,KOB)
+> 
+>         if(   RA(N).GE. ids   .and. RA(N).LE. float(ide)                &
+>         .and. RB(N).GE. jds   .and. RB(N).LE.float(jde) ) then
+> 
+>         MAXI=IFIX(RA(N)+RINDX)  ! xiang 0 qu zheng,dui zheng shu ,ji xiang xia
+> !qu zheng
+>         MAXI=MIN0(ide,MAXI)
+>         MINI=IFIX(RA(N)-RINDX)
+>         MINI=MAX0(1,MINI)
+> 
+>              obs_loc_ptq%lon = lon1
+>           if ( obs_loc_ptq%lon > 360.0 ) obs_loc_ptq%lon  = obs_loc_ptq%lon-360.0
+>              obs_loc_ptq%lat = lat1
+>           if ( abs(obs_loc_ptq%lat) <= 80.0 ) then
+>            coslat = cos(obs_loc_ptq%lat*DEG_TO_RAD)
+>            else
+>            coslat = cos(80.0*DEG_TO_RAD)
+>           end if
+> 
+>             if(kob .EQ.1 ) then
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+> 
+>                            model_loc%lon = T_grid%x(i)
+>                            if  ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_5day*coslat
+>                                 cov_factor = 0
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+>                               cor_oi = cov_factor_h
+>                               cov_factor = cov_factor_h* cov_factor_t
+> 
+>                         do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_5day_t0(j_ens)%data(i,kob,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                         enddo
+>                          ens_inc_hfq(:) = 0.0
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,kob,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+>                         ens_5day_t%data(i,kob,j) = ens_5day_t%data(i,kob,j) + ens_inc_hfq(20)
+>                     ENDDO
+> 
+>                 else
+>                 kmin = IFIX(rko(n))
+>                 kmax = ceiling(rko(n)) !xiang shang qu zheng
+> 
+>                     DO I=max0(its,MINI),min0(ite,MAXI)
+>                            model_loc%lon = T_grid%x(i)
+>                            if ( model_loc%lon > 360.0 ) model_loc%lon = model_loc%lon-360.0
+>                                 model_loc%lat = T_grid%y(j)
+>                               dist = get_dist(model_loc, obs_loc_ptq, atm_step)
+>                               dist = RADIUS * sqrt(dist)
+>                               dist0 = 1000*config_flags%e_r_5day*coslat
+>                               cov_factor_h = comp_cov_factor(dist, dist0)
+>                                 cov_factor = 0
+>                         if( kmax<=26 ) then
+>                         do k=kmin,kmax
+>                               cov_factor_v =   1 - abs( (rko(n) - k) )
+>                               cov_factor   =  cov_factor_v * cov_factor_h * cov_factor_t
+> 
+>                           do j_ens = 1, ens_size
+>                              enso_t_r_o(j_ens) =  ensem_stn(j_ens,n)
+>                              ens_in_hfq(j_ens) =  ens_5day_t0(j_ens)%data(i,k,j)
+>                              obs_inc_eakf_tr(j_ens) = errf(n)
+>                           enddo
+> 
+> 
+>                         ens_inc_hfq(:) = 0.0
+> 
+>                         call update_from_obs_inc_k(config_flags,enso_t_r_o,obs_inc_eakf_tr,&
+>                                         &obs_inc_oi_v,ens_in_hfq(:),ens_size,&
+>                                         &ens_inc_hfq,cov_factor,cor_oi,std_oi_o,std_oi_g,&
+>                                         &ass_method,ass_variable,i,j,n,k,atm_step,&
+>                                         & its, ite,jts, jte,obs_loc_ptq)
+> 
+>                           ens_5day_t%data(i,k,j) = ens_5day_t%data(i,k,j) + ens_inc_hfq(20)
+> 
+>                         enddo !k=kmin,kmax
+>                         endif ! if( kmax<=27 ) 
+>                   ENDDO
+> 
+>                 endif !  if(kob .EQ.1 )
+> 
+> 
+>           endif !ra
+>          ENDIF !IF
+>         enddo !n=1,6
+> 
+> 
+>     ENDDO  !J=jts,jte
+> 
+>  end subroutine ensemble_filter_atm_5day_r
+> 
+> 
+>   subroutine ensem_stnt(grid,config_flags,ens_6h_any,ensem_stn,atm_step,rio,rjo,rko,&
+>         & isd, ied, jsd, jed,kms, kme,its, ite,jts, jte, kts,kte,&
+>         ids,  ide,  jds,  jde,  kds,  kde )
+>     TYPE ( domain ), INTENT(INOUT) :: grid
+>     TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+>     type(ada_field_type), dimension(:), intent(inout) :: ens_6h_any
+>     real, intent(inout)  ::  ensem_stn(20,6)
+>     integer, intent(in)  :: atm_step
+>     REAL, INTENT(IN)     :: rio                 ! Obs west-east            
+>     REAL, INTENT(IN)     :: rjo                 ! Obs south-northcoordinate (non-stag grid).
+>     REAL, INTENT(IN)  :: rko(6)                 ! Obs vertical coordinate.
+>     integer, intent(in)  :: isd, ied, jsd, jed,kms, kme,its, ite,jts,jte, kts, kte
+>     integer, intent(in)  :: ids,  ide,  jds,  jde,  kds,  kde
+>   INTEGER :: IA(6)
+>   INTEGER :: IB(6)
+>   INTEGER :: IC(6)
+> ! new
+>   integer nsta,n_obs,iob,job,kob,KOBP,iob_ms,job_ms,n
+>   integer i_start,i_end,j_start,j_end    ! loop ranges for uratio,vratio calc.
+>   integer k_start,k_end,n_en
+> 
+>   real, parameter :: gridx_t = 0.5     ! Mass-point x stagger
+>   real, parameter :: gridy_t = 0.5     ! Mass-point y stagger
+>   real :: dummy = 999.
+>   real :: ra(6),rb(6),rc(6)
+>    real gridx,gridy,dxob,dyob,dzob
+>   real gridi,gridj
+> 
+>   gridi = rio
+>   gridj = rjo
+>   nsta = 6
+> 
+> 
+> 
+>    do  n_obs = 1,nsta
+>         ra(n_obs) = 0.
+>         rb(n_obs) = 0.
+>         rc(n_obs) = 0.
+>    enddo
+>    ensem_stn(:,1:nsta) = 0.0
+> ! set boundary
+>   i_start = max( its-1,ids )
+>   i_end   = min( ite+1,ide-1 )
+>   j_start = max( jts-1,jds )
+>   j_end   = min( jte+1,jde-1 )
+>   k_start = kts
+>   k_end = min( kte, kde-1 )
+> 
+>        GRIDX = gridx_t
+>        GRIDY = gridy_t
+> 
+> 
+> 
+>   do n = 1,nsta
+>         RA(N)=rio -GRIDX
+>         RB(N)=rjo -GRIDY
+>         RC(N)=rko(n)
+> 
+>         IA(N)=RA(N)
+>         IB(N)=RB(N)
+>         IC(N)=RC(N)  ! ic is integer ,rc is real 
+> 
+>         RA(N)=RA(N)-FLOAT(IA(N))
+>         RB(N)=RB(N)-FLOAT(IB(N))
+>         RC(N)=RC(N)-FLOAT(IC(N))
+> 
+>         IOB=MAX0(1,IA(N))
+>         IOB=MIN0(IOB,ide-1)
+>         JOB=MAX0(1,IB(N))
+>         JOB=MIN0(JOB,jde-1)
+>         DXOB=RA(N)-FLOAT(IA(N))
+>         DYOB=RB(N)-FLOAT(IB(N))
+> 
+> ! outside obs is big value
+>     do n_en=1,20
+>         IF((RA(N)-1.).LT.0)THEN
+>            ensem_stn(n_en,N)=ensem_stn(n_en,N)+DUMMY
+>         ENDIF
+>         IF((RB(N)-1.).LT.0)THEN
+>            ensem_stn(n_en,N)=ensem_stn(n_en,N)+DUMMY
+>         ENDIF
+>         IF((FLOAT(ide)-2.0*GRIDX-RA(N)-1.E-10).LT.0)THEN
+>            ensem_stn(n_en,N)=ensem_stn(n_en,N)+DUMMY
+>         ENDIF
+>         IF((FLOAT(jde)-2.0*GRIDY-RB(N)-1.E-10).LT.0)THEN
+>            ensem_stn(n_en,N)=ensem_stn(n_en,N)+DUMMY
+>         ENDIF
+>         if(rc(n).lt.1.) ensem_stn(n_en,n)=ensem_stn(n_en,n)+dummy
+>      enddo
+> 
+> 
+>   enddo !nsta
+> 
+> 
+>   do n = 1,nsta
+> 
+>        if ((isd <= gridi .AND. gridi <= ied) .AND. (jsd <= gridj .AND. gridj <= jed)) then
+> 
+>             KOB=MIN0(k_end,IC(N))
+>             KOBP=MIN0(KOB+1,K_END)
+> 
+>       do n_en=1,20
+>          ensem_stn(n_en,n) =  ensem_stn(n_en,n) + ((1.-DZOB)*((1.-DyOB)*((1.-&
+>                       DxOB)*ens_6h_any(n_en)%data(IOB,KOB,JOB)+DxOB* &
+>                       ens_6h_any(n_en)%data(IOB+1,KOB,JOB))+DyOB*((1.-DxOB)* &
+>                       ens_6h_any(n_en)%data(IOB,KOB,JOB+1)+DxOB* &
+>                       ens_6h_any(n_en)%data(IOB+1,KOB,JOB+1)))+DZOB*((1.- &
+>                       DyOB)*((1.-DxOB)*ens_6h_any(n_en)%data(IOB,KOBP,JOB)+DxOB &
+>                       *ens_6h_any(n_en)%data(IOB+1,KOBP,JOB))+DyOB*((1.-DxOB &
+>                       )*ens_6h_any(n_en)%data(IOB,KOBP,JOB+1)+DxOB* &
+>                       ens_6h_any(n_en)%data(IOB+1,KOBP,JOB+1))))
+> 
+> !write(*,*) 'n_en,n,ensem_stn',n_en,n,ensem_stn(n_en,n)
+> 
+>       enddo
+>         endif ! check obs location
+> 
+>   enddo !nsta
+> 
+>   end subroutine ensem_stnt

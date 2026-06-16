@@ -1,0 +1,55 @@
+!    -*- f90 -*-
+! Note: the context of this file is case sensitive.
+
+python module python_da__user__routines 
+    interface python_da_user_interface 
+        subroutine python_foo(current_timestr,x_size,y_size,z_size,u,v,t,q,xlat,xlon) ! in :pywrf:callback_python.F90:python_interface:python_da:unknown_interface
+            intent(callback,hide) python_foo
+            character*(*) intent(in) :: current_timestr
+            integer, optional,intent(in),check(shape(u, 0) == x_size),depend(u) :: x_size=shape(u, 0)
+            integer, optional,intent(in),check(shape(u, 1) == y_size),depend(u) :: y_size=shape(u, 1)
+            integer, optional,intent(in),check(shape(u, 2) == z_size),depend(u) :: z_size=shape(u, 2)
+            real dimension(x_size,y_size,z_size),intent(inout) :: u
+            real dimension(x_size,y_size,z_size),intent(inout),depend(y_size,z_size,x_size) :: v
+            real dimension(x_size,y_size,z_size),intent(inout),depend(y_size,z_size,x_size) :: t
+            real dimension(x_size,z_size),intent(inout),depend(z_size,x_size) :: q
+            real dimension(x_size,z_size),intent(inout),depend(z_size,x_size) :: xlat
+            real dimension(x_size,z_size),intent(inout),depend(z_size,x_size) :: xlon
+        end subroutine python_foo
+    end interface python_da_user_interface
+end python module python_da__user__routines
+python module pywrf ! in 
+    interface  ! in :pywrf
+        module plug ! in :pywrf:plug.F90
+            use main
+            real, public :: call_wrf_main
+            subroutine call_wrf_main ! in :pywrf:plug.F90:plug
+                use python_da__user__routines
+                intent(callback) python_foo
+                external python_foo
+            end subroutine call_wrf_main
+        end module plug
+        module python_interface ! in :pywrf:callback_python.F90
+            real, public :: python_da
+            subroutine python_da(current_timestr,x_size,y_size,z_size,u,v,t,q,xlat,xlon) ! in :pywrf:callback_python.F90:python_interface
+                use python_da__user__routines
+                character*(*) intent(in) :: current_timestr
+                integer, optional,intent(in),check(shape(u, 0) == x_size),depend(u) :: x_size=shape(u, 0)
+                integer, optional,intent(in),check(shape(u, 1) == y_size),depend(u) :: y_size=shape(u, 1)
+                integer, optional,intent(in),check(shape(u, 2) == z_size),depend(u) :: z_size=shape(u, 2)
+                real dimension(x_size,y_size,z_size),intent(inout) :: u
+                real dimension(x_size,y_size,z_size),intent(inout),depend(y_size,z_size,x_size) :: v
+                real dimension(x_size,y_size,z_size),intent(inout),depend(y_size,z_size,x_size) :: t
+                real dimension(x_size,z_size),intent(inout),depend(z_size,x_size) :: q
+                real dimension(x_size,z_size),intent(inout),depend(z_size,x_size) :: xlat
+                real dimension(x_size,z_size),intent(inout),depend(z_size,x_size) :: xlon
+                intent(callback) python_foo
+                external python_foo
+            end subroutine python_da
+        end module python_interface
+    end interface 
+end python module pywrf
+
+! This file was auto-generated with f2py (version:1.26.4).
+! See:
+! https://web.archive.org/web/20140822061353/http://cens.ioc.ee/projects/f2py2e

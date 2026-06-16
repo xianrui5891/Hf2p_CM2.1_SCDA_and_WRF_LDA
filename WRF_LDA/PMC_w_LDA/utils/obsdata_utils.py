@@ -3,7 +3,7 @@ from pathlib import Path
 from datetime import datetime
 
 class obs_data_loader:
-    def __init__(self, obs_dir='../data/obs',
+    def __init__(self, obs_dir='./obs',
                   missing=-9999.999,
                   norm_tag=True,
                   keep_fields=None,
@@ -57,10 +57,6 @@ class obs_data_loader:
             key = (lat,lon)
             if key not in self.data[timestamp]:
                 self.data[timestamp][key] = {}
-
-            height = float(parts[idx['levm']])
-            if height > 100.0:
-                continue
 
             for val_name_obs in self.keep_fields:
                 val = float(parts[idx[val_name_obs]])

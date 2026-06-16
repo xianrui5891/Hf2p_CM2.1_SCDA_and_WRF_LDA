@@ -1,8 +1,11 @@
 """
 主程序位置
 """
-import os
 import sys
+import time
+
+start_program = time.time()
+da_time_total = 0.0
 
 from cm2 import *
 import numpy as np
@@ -11,6 +14,7 @@ import mpi4py
 mpi4py.rc.initialize = False  
 mpi4py.rc.finalize   = False 
 from mpi4py import MPI
+from utils.paths import DEFAULT_NMC_BACKGROUND_COVARIANCE_PATH
 
 
 #from latent import latent_cda
@@ -41,12 +45,20 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 da_intervals = 12
 da_aim_tag = 6
+NMC_BACKGROUND_COVARIANCE_PATH = DEFAULT_NMC_BACKGROUND_COVARIANCE_PATH
+coastal_sst_obs_weighting = True
+coastal_sst_obs_weight_width = 8
+coastal_sst_obs_weight = 0.001
+coastal_ocean_relaxation = False
+coastal_ocean_relaxation_width = 2
+coastal_ocean_relaxation_factor = 0.35
+online_plotting = False
 
 
 #operators
-is_figure = False
-is_save_nc = True
-is_save_all_in_one = True
+is_figure = online_plotting
+is_save_nc = False
+is_save_all_in_one = False
 is_scda = True
 sv = None
 cda_model = None
@@ -57,14 +69,35 @@ if rank==0:
         import torch
         from vae_cda import *
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        cda_model = latent_space_da(da_interval=da_intervals, dev=device)
+        cda_model = latent_space_da(
+            da_interval=da_intervals,
+            dev=device,
+            max_iterations=100,
+            nmc_background_covariance_path=NMC_BACKGROUND_COVARIANCE_PATH,
+            coastal_sst_obs_weighting=coastal_sst_obs_weighting,
+            coastal_sst_obs_weight_width=coastal_sst_obs_weight_width,
+            coastal_sst_obs_weight=coastal_sst_obs_weight,
+            coastal_ocean_relaxation=coastal_ocean_relaxation,
+            coastal_ocean_relaxation_width=coastal_ocean_relaxation_width,
+            coastal_ocean_relaxation_factor=coastal_ocean_relaxation_factor,
+            da_diagnostic_plot_dir="python_plots/diagnostics" if online_plotting else None,
+        )
     
-    from data_output_utils import FieldPlotter
-    plotter = FieldPlotter("./python_plots")
+    if online_plotting:
+        from utils.plotting import FieldPlotter
+        plotter = FieldPlotter("./python_plots")
 
 def save_data(time_str, p_bot, sst, data_type):
-    plotter.plot_and_save(time_str=time_str, var_name='p_bot', data2d=p_bot, data_type=data_type)
-    plotter.plot_and_save(time_str=time_str, var_name='sst', data2d=sst, data_type=data_type)
+    if not online_plotting or plotter is None:
+        return
+    plot_nc = int(time_str)
+    plot_p_bot = p_bot
+    plot_sst = sst
+    if cda_model is not None:
+        plot_p_bot = cda_model.mask_field_for_plot("p_bot", p_bot, nc=plot_nc)
+        plot_sst = cda_model.mask_field_for_plot("sst", sst, nc=plot_nc)
+    plotter.plot_and_save(time_str=time_str, var_name='p_bot', data2d=plot_p_bot, data_type=data_type)
+    plotter.plot_and_save(time_str=time_str, var_name='sst', data2d=plot_sst, data_type=data_type)
 
 
 
@@ -98,22 +131,32 @@ for nc in range(1,num_cpld_calls+1):
     nu_scda = 0
 
     if( nc%da_intervals == da_aim_tag%da_intervals ):
+        start_da = time.time()
         nu_scda = 1
         if rank==0 and is_scda:
-            tempp_bot = P_bot
-            tempsst = SST
+            if online_plotting:
+                tempp_bot = P_bot.copy()
+                tempsst = SST.copy()
             save_data(time_str=f"{nc}", p_bot=P_bot, sst=SST, data_type="original")
 
             atm_after, ocn_after = cda_model.do_da(nc, [T_bot, U_bot, V_bot, P_bot], [SST, SSU, SSV, SSZ])
             T_bot, U_bot, V_bot, P_bot = atm_after
             SST, SSU, SSV, SSZ = ocn_after
             save_data(time_str=f"{nc}", p_bot=P_bot, sst=SST, data_type="da")
-            save_data(time_str=f"{nc}", p_bot=P_bot-tempp_bot, sst=SST-tempsst, data_type="increment")
+            if online_plotting:
+                save_data(time_str=f"{nc}", p_bot=P_bot-tempp_bot, sst=SST-tempsst, data_type="increment")
 
         comm.Bcast(T_bot),comm.Bcast(U_bot),comm.Bcast(V_bot),comm.Bcast(P_bot)
         comm.Bcast(SST),comm.Bcast(SSU),comm.Bcast(SSV),comm.Bcast(SSZ)
+        end_da = time.time()
+        da_time_total +=  end_da - start_da
     
+
     cm2_cda_plugs.restart_step(nc)
 #end of the process
+
+end_program = time.time()
+program_time_total = end_program - start_program 
+print(f"total program time is:{program_time_total:.2f}, da time is {da_time_total:.2f}")
 
 cm2_cda_plugs.main_end()

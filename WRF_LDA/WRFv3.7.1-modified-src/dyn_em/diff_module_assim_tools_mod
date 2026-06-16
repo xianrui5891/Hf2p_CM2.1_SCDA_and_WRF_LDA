@@ -1,0 +1,110 @@
+14c14
+<        & obs_increment_prf_eta_hyb_stn, obs_increment_hfq !lulv add *stn
+---
+>        & obs_increment_prf_eta_hyb_stn, obs_increment_hfq,update_from_obs_inc_k !lulv add *stn
+372,375d371
+<      if (config_flags%debug_mda) then
+<       write(*,'("ensb20,meanb,cov",1xi5,1xi3,1xi3,1xi3,1xf16.2,1xf16.2,1xf16.2)')&
+<                atm_step,myproc,i_o,j_o,ensb(20),meanb,cov
+<      endif
+398,407d393
+<    if (config_flags%debug_mda) then
+<             write(*,'("a,new_cov,cov",1xi5,1xi3,1xi3,1xi3,1xf16.2,1xf16.2,1xf16.2)')&
+<                      atm_step,myproc,i_o,j_o,a,new_cov,cov
+< 
+<             write(*,'("new_mean,obs_var,mean",1xi5,1xi3,1xi3,1xi3,1xf16.2,1xf16.2,1xf16.2)')&
+<                      atm_step,myproc,i_o,j_o,new_mean,obs_var,mean
+< 
+<             write(*,'("obs,ens,ensb,obs_inc_eakf",1xi5,1xi3,1xi3,1xi3,1xf16.2,1xf16.2,1xf16.2,1xf16.2)')&
+<                      atm_step,myproc,i_o,j_o,obs,ens(20),ensb(20),obs_inc_eakf(20)
+<      endif
+950a937,1025
+> 
+>   subroutine update_from_obs_inc_k(config_flags,obs, obs_inc_eakf, obs_inc_oi,state, ens_size, new_state, cov_factor,&
+>        & cor_oi, std_oi_o, std_oi_g,ass_method,ass_variable,i,j,n,k,atm_step,&
+>         & isc,iec,jsc,jec,obs_loc)
+>       TYPE ( grid_config_rec_type ), INTENT(IN) :: config_flags
+>     integer, intent(in) :: ens_size
+>     real, intent(in), dimension(ens_size) :: obs, obs_inc_eakf, obs_inc_oi,state
+>     real, intent(inout), dimension(ens_size) :: new_state
+>     real, intent(in) :: cov_factor, cor_oi, std_oi_o, std_oi_g
+>     integer, intent(in) :: ass_method,ass_variable,i,j,n,k,isc,iec,jsc,jec
+>     real, dimension(ens_size) :: new_state_oi, new_state_eakf
+>     real :: var_oi_o, var_oi_g, mean_s, mean_o, cv_s, cv_o, cv, cr
+>     real :: cor_cut
+> INTEGER myproc
+> integer, intent(in) :: atm_step
+>     integer :: ie
+>     type(loc_type),intent(in)   ::  obs_loc
+> 
+> 
+>     var_oi_o = std_oi_o*std_oi_o
+>     var_oi_g = std_oi_g*std_oi_g
+> 
+>     ! Compute statistics up to the second moment
+> 
+>     select case ( ass_variable )
+>     case (1)
+>        cor_cut = cor_cutoff
+>     case (2)
+>        cor_cut = cor_cutoff*0.5
+>     case (3)
+>        cor_cut = cor_cutoff*4.0
+>     case (4)
+>        cor_cut = cor_cutoff*2.0
+>     case default
+>        !::sdu:: Possibly uninitialized.  Temporary value.
+>        cor_cut = cor_cutoff
+>     end select
+> 
+>     mean_s = sum(state) / ens_size
+>     mean_o = sum(obs) / ens_size
+> 
+>     cv_s = 0.0
+>     cv_o = 0.0
+>     cv   = 0.0
+> 
+> 
+>     do ie=1, ens_size
+>        cv_s = cv_s + (state(ie) - mean_s)*(state(ie) - mean_s)
+>        cv_o = cv_o + (obs(ie) - mean_o)*(obs(ie) - mean_o)
+>        cv   = cv + (state(ie) - mean_s)*(obs(ie) - mean_o)
+>     end do
+> 
+>     cv_s = cv_s / ens_size
+>     cv_o = cv_o / ens_size
+>     cv   = cv / ens_size
+> 
+> 
+>     if ( cv_s /= 0.0 .and. cv_o /= 0.0 ) then
+>        cr   = cv /(sqrt(cv_s)*sqrt(cv_o))
+>     else
+>        cr = 0.0
+>     end if
+> 
+>     if ( abs(cr) >= cor_cut .and. cv_o > 1.e-8 ) then
+>        if ( cv_o < var_oi_o ) then
+>           if ( std_oi_o == 0.0 ) then
+>              new_state_oi = 0.0
+>           else
+> !!$             cv = cor_oi * std_oi_g*std_oi_o
+>              cv = cr * std_oi_g*std_oi_o
+>              new_state_oi = (cov_factor * cv / var_oi_o) * obs_inc_oi
+>           end if
+> 
+>           new_state_eakf = (cov_factor * cv / cv_o) * obs_inc_eakf
+>           new_state =  cv_o/(cv_o+var_oi_o) * new_state_eakf + var_oi_o/(cv_o+var_oi_o) * new_state_oi
+>        else
+>           new_state = (cov_factor * cv / cv_o) * obs_inc_eakf
+>        end if
+>     else
+> 
+> 
+>        new_state = 0.0
+>     end if
+> 
+> 
+> 
+> 
+>  end subroutine update_from_obs_inc_k
+> 
